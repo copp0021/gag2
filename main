@@ -222,9 +222,14 @@ function ReportStatus(commandId, isSuccess, details)
 end
 
 -- ==============================================================================
--- 🔥 ระบบการส่งจดหมายด้วยตรรกะแบบแยกก้อน Duplex Split Chunk
+-- 🔥 ระบบการส่งจดหมาย (ปรับปรุงให้ป้องกัน Error nil value)
 -- ==============================================================================
 function SendSingleMail(targetUserId, category, itemKey, count, note)
+    if not Mailbox or not Mailbox.SendBatch then
+        warn("❌ ไม่พบ Mailbox.SendBatch ในเกม (อาจจะมีการอัพเดตโครงสร้างเกม)")
+        return false
+    end
+
     local batchData = {}
     local remaining = math.floor(count or 1)
 
@@ -241,6 +246,10 @@ function SendSingleMail(targetUserId, category, itemKey, count, note)
     local success, err = pcall(function()
         Mailbox.SendBatch:Fire(targetUserId, batchData, note or "")
     end)
+
+    if not success then
+        warn("❌ ส่ง Mailbox ไม่สำเร็จ: " .. tostring(err))
+    end
 
     return success
 end
