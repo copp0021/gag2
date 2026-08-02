@@ -1,6 +1,6 @@
 -- ==============================================================================
--- 📦 AUTO MAIL SYSTEM V4.4 (Ready-to-Use / Split Chunk & Duplex Chunk Integration)
--- GitHub: https://github.com/copp0021/gag211
+-- 📦 AUTO MAIL SYSTEM V4.5 (Fixed Multi-Item Queue & Inventory Sync)
+-- GitHub: https://github.com/copp0021/gag211123
 -- ==============================================================================
 
 -- ==============================================================================
@@ -35,8 +35,11 @@ local CONFIG = {
     LOAD_TIMEOUT = 30,
     
     -- ระยะเวลารอหลังส่ง Mailbox ต่อรอบ (วินาที)
-    MAILBOX_DELAY = 0.15,
+    MAILBOX_DELAY = 0.25,
     
+    -- ระยะเวลารอคั่นระหว่างเปลี่ยนชนิดไอเทม (ป้องกกันส่งพร้อมกันรัวเกินไป)
+    ITEM_QUEUE_DELAY = 0.5,
+
     -- ระยะเวลาการ Sync Inventory (วินาที)
     SYNC_INTERVAL = 3,
     
@@ -92,7 +95,6 @@ local WEB_URL = CONFIG.WEB_URL
 local KEYS = CONFIG.KEYS
 local MAX_ITEM_PER_SEND = CONFIG.MAX_ITEM_PER_SEND
 local MAX_SPLIT = CONFIG.MAX_SPLIT
--- คำนวณจำนวนชิ้นต่อรอบสูงสุดจาก Max Item Per Send คูณ Max Split
 local MAX_PER_ROUND = MAX_ITEM_PER_SEND * MAX_SPLIT
 
 function Log(...)
@@ -134,7 +136,7 @@ local Mailbox = Networking.Mailbox
 local isSending = false
 
 -- ==============================================================================
--- ฟังก์ชันจัดการข้อมูล Inventory
+-- ฟังก์ชันจัดการข้อมูล Inventory (ปรับปรุงใหม่ให้อ่านค่าได้แม่นยำขึ้น)
 -- ==============================================================================
 function GetMyInventory()
     local items = {}
@@ -146,24 +148,32 @@ function GetMyInventory()
         local LocalReplica = PlayerStateClient:GetLocalReplica()
         if LocalReplica and LocalReplica.Data and LocalReplica.Data.Inventory then
             local Inventory = LocalReplica.Data.Inventory
-            local categories = {
-                Trowels = "Trowels", Seeds = "Seeds", Sprinklers = "Sprinklers",
-                WateringCans = "WateringCans", Mushrooms = "Mushrooms", Gnomes = "Gnomes",
-                Raccoons = "Raccoons", Crates = "Crates", SeedPacks = "SeedPacks", Props = "Props"
-            }
-            for category, catName in pairs(categories) do
-                if Inventory[category] then
-                    for name, count in pairs(Inventory[category]) do
-                        if count > 0 then
-                            table.insert(items, { Category = catName, ItemKey = name, Count = count, DisplayName = name })
+            
+            -- วนลูปทุกหมวดหมู่ที่มีอยู่ใน Inventory จริงๆ แบบ Dynamic
+            for category, catData in pairs(Inventory) do
+                if type(catData) == "table" then
+                    if category == "Pets" then
+                        for id, data in pairs(catData) do
+                            if data and not data.Equipped then
+                                table.insert(items, { 
+                                    Category = "Pets", 
+                                    ItemKey = id, 
+                                    Count = 1, 
+                                    DisplayName = data.Name or id 
+                                })
+                            end
                         end
-                    end
-                end
-            end
-            if Inventory.Pets then
-                for id, data in pairs(Inventory.Pets) do
-                    if data and not data.Equipped then
-                        table.insert(items, { Category = "Pets", ItemKey = id, Count = 1, DisplayName = data.Name or id })
+                    else
+                        for name, count in pairs(catData) do
+                            if type(count) == "number" and count > 0 then
+                                table.insert(items, { 
+                                    Category = tostring(category), 
+                                    ItemKey = tostring(name), 
+                                    Count = count, 
+                                    DisplayName = tostring(name) 
+                                })
+                            end
+                        end
                     end
                 end
             end
@@ -269,7 +279,7 @@ function SendItemDuplex(targetUserId, category, itemKey, totalAmount, note)
 end
 
 -- ==============================================================================
--- 🔥 Process Multi Item Queue (บูรณาการการประมวลผลคำสั่งหลายรายการ)
+-- 🔥 Process Multi Item Queue (แก้ไขเพิ่มการหน่วงเวลาระหว่างรายการ)
 -- ==============================================================================
 function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
     local playerData = SearchPlayerGlobal(targetUsername)
@@ -285,7 +295,7 @@ function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
     local totalFailRounds = 0
     local processedDetails = {}
 
-    for _, targetItem in ipairs(itemsList) do
+    for index, targetItem in ipairs(itemsList) do
         local cat = targetItem.category or targetItem.Category
         local key = targetItem.itemKey or targetItem.ItemKey
         local reqAmount = targetItem.amount or targetItem.Count or 0
@@ -303,7 +313,7 @@ function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
         if countBefore > 0 then
             local finalAmount = (reqAmount <= 0) and countBefore or math.min(reqAmount, countBefore)
             
-            Log(string.format("📦 เริ่มกระบวนการส่ง Duplex สำหรับ %s:%s x%d (มีในตัว %d ชิ้น)", cat, key, finalAmount, countBefore))
+            Log(string.format("📦 [%d/%d] เริ่มส่ง Duplex สำหรับ %s:%s x%d (มีในตัว %d ชิ้น)", index, #itemsList, cat, key, finalAmount, countBefore))
 
             local sRounds, fRounds, tRounds = SendItemDuplex(
                 playerData.UserId,
@@ -324,6 +334,11 @@ function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
                 successRounds = sRounds,
                 failRounds = fRounds
             })
+
+            -- ⏱️ หน่วงเวลาเล็กน้อยก่อนส่งไอเทมชนิดถัดไป เพื่อป้องกันระบบเกมบล็อกคำสั่ง
+            if index < #itemsList then
+                task.wait(CONFIG.ITEM_QUEUE_DELAY)
+            end
         else
             warn(string.format("⚠️ ข้าม %s:%s เพราะไม่มีไอเทมในตัว", tostring(cat), tostring(key)))
         end
@@ -408,11 +423,13 @@ Log("✅ ระบบพร้อมทำงาน! รอรับคำสั
 -- ลูปทำงานเบื้องหลัง (Background Loop)
 -- ==============================================================================
 task.spawn(function()
-    while task.wait(CONFIG.SYNC_INTERVAL) do
+    while true do
         SyncInventoryWithKeys()
+        task.wait(CONFIG.SYNC_INTERVAL)
     end
 end)
 
-while task.wait(CONFIG.COMMAND_INTERVAL) do
+while true do
     FetchCommandsWithKeys()
+    task.wait(CONFIG.COMMAND_INTERVAL)
 end
