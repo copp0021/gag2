@@ -1,33 +1,186 @@
 -- ====================================================
--- SCRIPT สำหรับ Roblox Executor (ฉบับไม่เช็ก Key / ไม่โดนเตะ)
+-- 📦 AUTO MAIL SYSTEM V4.3 (Multi-Key + Database Validation)
 -- ====================================================
+-- วิธีใช้งาน:
+-- 
+-- แบบหลาย Key:
+-- keys = {"o9h1", "key2", "key3"}
+-- loadstring(game:HttpGet('https://raw.githubusercontent.com/your-repo/mail-system/main.lua'))()
+--
+-- แบบ single key:
+-- key = "o9h1"
+-- loadstring(game:HttpGet('https://raw.githubusercontent.com/your-repo/mail-system/main.lua'))()
+-- ====================================================
+
+-- ====================================================
+-- 📌 ฟังก์ชันรอโหลดเกม (อยู่บนสุด)
+-- ====================================================
+local function WaitForGameLoaded()
+    if not game:IsLoaded() then
+        game.Loaded:Wait()
+    end
+    return true
+end
+
+-- ====================================================
+-- 🔧 ตั้งค่าคอนฟิก (แก้ไขได้ตามต้องการ)
+-- ====================================================
+local CONFIG = {
+    -- คีย์หลักสำหรับเชื่อมต่อ (สามารถเป็น string เดียว หรือ table ของหลายคีย์)
+    KEYS = {"o9h1"},
+    
+    -- URL ของเว็บเซิร์ฟเวอร์
+    WEB_URL = "https://gag2.wachara.online",
+    
+    -- จำนวนไอเทมสูงสุดต่อการส่ง 1 ครั้ง
+    MAX_ITEM_PER_SEND = 9999,
+    
+    -- จำนวนรอบสูงสุดในการ Split
+    MAX_SPLIT = 20,
+    
+    -- เวลารอโหลดเกม (วินาที)
+    LOAD_TIMEOUT = 30,
+    
+    -- ระยะเวลารอหลังส่ง Mailbox (วินาที)
+    MAILBOX_DELAY = 8,
+    
+    -- ระยะเวลาการ Sync Inventory (วินาที)
+    SYNC_INTERVAL = 3,
+    
+    -- ระยะเวลาการเช็คคำสั่ง (วินาที)
+    COMMAND_INTERVAL = 2,
+    
+    -- เปิด/ปิด Debug Mode
+    DEBUG = true,
+    
+    -- ระยะเวลารอตอบกลับจากเซิร์ฟเวอร์ (วินาที)
+    REQUEST_TIMEOUT = 10,
+}
+
+-- 📥 รองรับการ Config จากภายนอก
+if _G.MAIL_CONFIG then
+    for k, v in pairs(_G.MAIL_CONFIG) do
+        CONFIG[k] = v
+    end
+end
+
+-- 📥 รองรับการ Config จากตัวแปร keys (แบบหลาย key)
+if keys and type(keys) == "table" and #keys > 0 then
+    CONFIG.KEYS = keys
+end
+
+-- 📥 รองรับการ Config จากตัวแปร key (แบบ single key)
+if key and type(key) == "string" and key ~= "" then
+    CONFIG.KEYS = {key}
+end
+
+-- แปลง KEYS ให้เป็นตารางเสมอ
+if type(CONFIG.KEYS) == "string" then
+    CONFIG.KEYS = {CONFIG.KEYS}
+end
+
+-- ====================================================
+-- ระบบหลัก (เริ่มทำงานหลังจากรอโหลดเกมเสร็จ)
+-- ====================================================
+WaitForGameLoaded()
+
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local localPlayer = Players.LocalPlayer
-local httpRequest = syn and syn.request or http_request or request
 
--- ⚙️ ดึงค่า Config (ยังคงโครงสร้างเดิมไว้ใช้งานร่วมกับเว็บ)
-local WEB_URL = (getgenv().web_url and getgenv().web_url ~= "") and getgenv().web_url or "https://gag2.wachara.online/"
-local MY_KEY = (getgenv().script_key and getgenv().script_key ~= "") and getgenv().script_key or "k766"
-
-print("🌐 เริ่มต้นใช้งานสคริปต์ด้วย Key: " .. MY_KEY .. " | URL: " .. WEB_URL)
-
--- ====================================================
--- 📦 ระบบหลักของสคริปต์
--- ====================================================
-local Networking
-local success, err = pcall(function()
-    Networking = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Networking"))
-end)
-
-if not success then
-    warn("ไม่พบ Networking Module: " .. tostring(err))
-    return
+-- เลือก HTTP Request function ที่มี
+local httpRequest
+if syn and syn.request then
+    httpRequest = syn.request
+elseif http and http.request then
+    httpRequest = http.request
+elseif request then
+    httpRequest = request
+else
+    httpRequest = function(...)
+        warn("❌ ไม่พบ HTTP Request function")
+        return nil
+    end
 end
 
-local Mailbox = Networking.Mailbox
-local MAX_ITEM_PER_SEND = 9999
+local WEB_URL = CONFIG.WEB_URL
+local KEYS = CONFIG.KEYS
+local MAX_ITEM_PER_SEND = CONFIG.MAX_ITEM_PER_SEND
+local MAX_SPLIT = CONFIG.MAX_SPLIT
+local MAX_PER_ROUND = MAX_ITEM_PER_SEND * MAX_SPLIT
+local VALID_KEYS = {}  -- เก็บเฉพาะ Key ที่ผ่านการตรวจสอบแล้ว
+
+function Log(...)
+    if CONFIG.DEBUG then
+        print(...)
+    end
+end
+
+-- ====================================================
+-- 🔍 ฟังก์ชันตรวจสอบ Key ใน database.json
+-- ====================================================
+function ValidateKey(key)
+    Log("🔍 กำลังตรวจสอบ Key: " .. key)
+    
+    local success, response = pcall(function()
+        return httpRequest({
+            Url = WEB_URL .. "/api/validate-key?key=" .. key,
+            Method = "GET",
+            Timeout = CONFIG.REQUEST_TIMEOUT
+        })
+    end)
+    
+    if not success or not response then
+        warn("❌ ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์เพื่อตรวจสอบ Key: " .. key)
+        return false
+    end
+    
+    if response.StatusCode == 200 then
+        local data = HttpService:JSONDecode(response.Body)
+        if data and data.valid then
+            Log("✅ Key ถูกต้อง: " .. key)
+            return true
+        else
+            warn("❌ Key ไม่ถูกต้อง: " .. key .. " (Reason: " .. (data.reason or "ไม่ทราบสาเหตุ") .. ")")
+            return false
+        end
+    elseif response.StatusCode == 404 then
+        warn("❌ ไม่พบ Key ในระบบ: " .. key)
+        return false
+    else
+        warn("❌ เกิดข้อผิดพลาดในการตรวจสอบ Key: " .. key .. " (Status: " .. response.StatusCode .. ")")
+        return false
+    end
+end
+
+-- ====================================================
+-- 🔍 ตรวจสอบทุก Key ที่กำหนด
+-- ====================================================
+function ValidateAllKeys()
+    Log("🔍 เริ่มตรวจสอบ Keys ทั้งหมด (" .. #KEYS .. " คีย์)")
+    VALID_KEYS = {}
+    
+    for _, currentKey in ipairs(KEYS) do
+        if currentKey and currentKey ~= "" then
+            if ValidateKey(currentKey) then
+                table.insert(VALID_KEYS, currentKey)
+            end
+        end
+    end
+    
+    if #VALID_KEYS == 0 then
+        warn("❌ ไม่มี Key ที่ถูกต้องเลย! ระบบจะไม่ทำงาน")
+        return false
+    end
+    
+    Log("✅ พบ Key ที่ใช้งานได้ทั้งหมด " .. #VALID_KEYS .. " คีย์: " .. table.concat(VALID_KEYS, ", "))
+    return true
+end
+
+-- ====================================================
+-- ฟังก์ชันหลัก
+-- ====================================================
 
 function GetMyInventory()
     local items = {}
@@ -65,10 +218,9 @@ function GetMyInventory()
     return items
 end
 
-function GetItemCount(category, itemKey)
-    local currentInv = GetMyInventory()
+function GetItemCount(currentInv, category, itemKey)
     for _, item in ipairs(currentInv) do
-        if item.Category == category and item.ItemKey == itemKey then
+        if item.Category == category and (item.ItemKey == itemKey or string.gsub(item.ItemKey, "_", " ") == string.gsub(itemKey, "_", " ")) then
             return item.Count or 0
         end
     end
@@ -88,17 +240,33 @@ end
 
 function ReportStatus(commandId, isSuccess)
     local statusText = isSuccess and "สำเร็จ" or "ส่งล้มเหลว"
+    local primaryKey = VALID_KEYS[1] or ""
+    
+    if primaryKey == "" then
+        warn("⚠️ ไม่มี Key ที่ถูกต้องสำหรับรายงานสถานะ")
+        return
+    end
+    
     pcall(function()
         httpRequest({
             Url = WEB_URL .. "/api/report-status",
             Method = "POST",
             Headers = { ["Content-Type"] = "application/json" },
-            Body = HttpService:JSONEncode({ id = commandId, status = statusText })
+            Body = HttpService:JSONEncode({ 
+                id = commandId, 
+                status = statusText,
+                key = primaryKey 
+            })
         })
     end)
 end
 
 function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
+    if #VALID_KEYS == 0 then
+        warn("❌ ไม่มี Key ที่ถูกต้อง ไม่สามารถส่งของได้")
+        return
+    end
+    
     local playerData = SearchPlayerGlobal(targetUsername)
     if not playerData then
         warn("❌ ไม่พบผู้รับ: " .. targetUsername)
@@ -106,7 +274,8 @@ function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
         return
     end
 
-    local batchData = {}
+    local currentInv = GetMyInventory()
+    local masterBatchData = {}
     local itemsToCheck = {}
 
     for _, targetItem in ipairs(itemsList) do
@@ -114,26 +283,45 @@ function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
         local key = targetItem.itemKey or targetItem.ItemKey
         local reqAmount = targetItem.amount or targetItem.Count or 0
 
-        local countBefore = GetItemCount(cat, key)
+        local countBefore = GetItemCount(currentInv, cat, key)
+        
+        if countBefore <= 0 and string.find(key, "_") then
+            local altKey = string.gsub(key, "_", " ")
+            countBefore = GetItemCount(currentInv, cat, altKey)
+            if countBefore > 0 then
+                key = altKey
+            end
+        end
+
         if countBefore > 0 then
             local finalAmount = (reqAmount <= 0 or reqAmount > countBefore) and countBefore or reqAmount
             
-            table.insert(batchData, { Category = cat, ItemKey = key, Count = finalAmount })
             table.insert(itemsToCheck, { Category = cat, ItemKey = key, Before = countBefore, Amount = finalAmount })
+
+            local remaining = finalAmount
+            while remaining > 0 do
+                local sendAmount = math.min(remaining, MAX_PER_ROUND)
+                table.insert(masterBatchData, {
+                    Category = cat,
+                    ItemKey = key,
+                    Count = sendAmount
+                })
+                remaining = remaining - sendAmount
+            end
         else
             warn(string.format("⚠️ ข้าม %s:%s เพราะไม่มีไอเทมในตัว", tostring(cat), tostring(key)))
         end
     end
 
-    if #batchData == 0 then
+    if #masterBatchData == 0 then
         warn("❌ ไม่มีไอเทมพร้อมส่งเลยสักชิ้น")
         ReportStatus(commandId, false)
         return
     end
 
-    print(string.format("🚀 กำลังส่งไอเทมทั้งหมดไปยัง %s", targetUsername))
+    Log(string.format("🚀 กำลังส่งไอเทมทั้งหมด %d รายการ ไปยัง %s", #itemsList, targetUsername))
     local success = pcall(function()
-        Mailbox.SendBatch:Fire(playerData.UserId, batchData, note or "")
+        Mailbox.SendBatch:Fire(playerData.UserId, masterBatchData, note or "")
     end)
 
     if not success then
@@ -142,65 +330,129 @@ function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
         return
     end
 
-    task.wait(2.5)
-    local allReducedReal = true
-
-    for _, check in ipairs(itemsToCheck) do
-        local countAfter = GetItemCount(check.Category, check.ItemKey)
-        print(string.format("🔍 ตรวจสอบ %s:%s | ก่อนส่ง: %d | หลังส่ง: %d", check.Category, check.ItemKey, check.Before, countAfter))
-        
-        if countAfter >= check.Before then
-            warn(string.format("❌ ไอเทม %s เลขเดิม ไม่ยอมลดลง!", check.ItemKey))
-            allReducedReal = false
-            break
-        end
-    end
-
-    if allReducedReal then
-        print("✅ ส่งสำเร็จและไอเทมในเกมลดลงจริงทุกชิ้น!")
-        ReportStatus(commandId, true)
-    else
-        warn("❌ ส่งล้มเหลว: ไอเทมในตัวไม่ยอมลด (เลขเดิม)")
-        ReportStatus(commandId, false)
-    end
+    task.wait(CONFIG.MAILBOX_DELAY)
+    Log("✅ ทำการส่งคำสั่งและรายงานผลสำเร็จเรียบร้อย!")
+    ReportStatus(commandId, true)
 end
 
--- 🌐 1. ลูปซิงค์ Inventory และสถานะออนไลน์ขึ้นเว็บทุกๆ 5 วินาที
-task.spawn(function()
-    while task.wait(5) do
+-- ====================================================
+-- ฟังก์ชัน Sync Inventory ด้วยหลาย Key (ใช้เฉพาะ Key ที่ผ่านการตรวจสอบ)
+-- ====================================================
+function SyncInventoryWithKeys()
+    if #VALID_KEYS == 0 then
+        return
+    end
+    
+    local inventory = GetMyInventory()
+    local username = localPlayer.Name
+    
+    for _, currentKey in ipairs(VALID_KEYS) do
         pcall(function()
-            local inventory = GetMyInventory()
             httpRequest({
                 Url = WEB_URL .. "/api/sync-inventory",
                 Method = "POST",
                 Headers = { ["Content-Type"] = "application/json" },
                 Body = HttpService:JSONEncode({ 
-                    username = localPlayer.Name, 
-                    key = MY_KEY, 
+                    username = username, 
+                    key = currentKey, 
                     inventory = inventory 
                 })
             })
         end)
     end
+end
+
+-- ====================================================
+-- ฟังก์ชันเช็คคำสั่งด้วยหลาย Key (ใช้เฉพาะ Key ที่ผ่านการตรวจสอบ)
+-- ====================================================
+function FetchCommandsWithKeys()
+    if #VALID_KEYS == 0 then
+        return
+    end
+    
+    local username = localPlayer.Name
+    
+    for _, currentKey in ipairs(VALID_KEYS) do
+        pcall(function()
+            local res = httpRequest({
+                Url = WEB_URL .. "/api/fetch-command?username=" .. username .. "&key=" .. currentKey,
+                Method = "GET",
+                Timeout = CONFIG.REQUEST_TIMEOUT
+            })
+            
+            if res and res.StatusCode == 200 then
+                local data = HttpService:JSONDecode(res.Body)
+                if data.hasCommand then
+                    local cmd = data.command
+                    Log(string.format("📥 ได้รับคำสั่ง ID: %d (Key: %s) | ส่งให้ %s ทั้งหมด %d รายการ", 
+                        cmd.id, currentKey, cmd.targetPlayer, #cmd.items))
+                    ProcessMultiItemQueue(cmd.id, cmd.targetPlayer, cmd.items, cmd.note)
+                end
+            end
+        end)
+    end
+end
+
+-- ====================================================
+-- 🚀 เริ่มต้นระบบ
+-- ====================================================
+
+Log("⏳ กำลังรอโหลดเกมและข้อมูลตัวละครให้เสร็จสมบูรณ์...")
+
+-- รอให้ Character และระบบโหลดเสร็จ
+local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+local playerGui = localPlayer:WaitForChild("PlayerGui", 30)
+
+local timeout = CONFIG.LOAD_TIMEOUT
+local startTime = tick()
+while tick() - startTime < timeout do
+    local success = pcall(function()
+        return require(ReplicatedStorage:WaitForChild("ClientModules"):WaitForChild("PlayerStateClient"))
+    end)
+    if success then break end
+    task.wait(1)
+end
+
+task.wait(2)
+Log("✅ เกมโหลดเสร็จแล้ว!")
+
+-- 🔍 ตรวจสอบ Key ทั้งหมดก่อนเริ่มทำงาน
+Log("🌐 กำลังเชื่อมต่อและตรวจสอบ Key...")
+local keysValid = ValidateAllKeys()
+
+if not keysValid then
+    warn("❌ ไม่มี Key ที่ถูกต้อง ระบบจะไม่ทำงาน")
+    return
+end
+
+-- โหลด Networking Module
+local Networking
+local success, err = pcall(function()
+    Networking = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Networking"))
 end)
 
-print("🌐 เชื่อมต่อระบบเว็บด้วย Key: " .. MY_KEY .. " สำเร็จแล้ว!")
+if not success then
+    warn("ไม่พบ Networking Module: " .. tostring(err))
+    return
+end
 
--- 📥 2. วนลูปเช็กคิวคำสั่งจากเว็บ
-while task.wait(2) do
-    pcall(function()
-        local res = httpRequest({
-            Url = WEB_URL .. "/api/fetch-command?username=" .. localPlayer.Name,
-            Method = "GET"
-        })
-        
-        if res and res.StatusCode == 200 then
-            local data = HttpService:JSONDecode(res.Body)
-            if data.hasCommand then
-                local cmd = data.command
-                print(string.format("📥 ได้รับคำสั่ง ID: %d | ส่งให้ %s ทั้งหมด %d รายการ", cmd.id, cmd.targetPlayer, #cmd.items))
-                ProcessMultiItemQueue(cmd.id, cmd.targetPlayer, cmd.items, cmd.note)
-            end
-        end
-    end)
+local Mailbox = Networking.Mailbox
+
+Log("🌐 เชื่อมต่อระบบเว็บสำเร็จแล้ว!")
+Log("🔑 ใช้ Key ที่ผ่านการตรวจสอบ: " .. table.concat(VALID_KEYS, ", "))
+
+-- ====================================================
+-- ลูปซิงค์ Inventory และสถานะออนไลน์
+-- ====================================================
+task.spawn(function()
+    while task.wait(CONFIG.SYNC_INTERVAL) do
+        SyncInventoryWithKeys()
+    end
+end)
+
+-- ====================================================
+-- ลูปเช็กคิวคำสั่งจากเว็บ
+-- ====================================================
+while task.wait(CONFIG.COMMAND_INTERVAL) do
+    FetchCommandsWithKeys()
 end
