@@ -1,5 +1,5 @@
 -- ====================================================
--- 📦 AUTO MAIL SYSTEM V4.3 (Fixed Key & Duplex Send Version)
+-- 📦 AUTO MAIL SYSTEM V4.3 (Unlimited Send Version)
 -- GitHub: https://github.com/copp0021/gag2
 -- ====================================================
 -- ====================================================
@@ -11,6 +11,7 @@ local function WaitForGameLoaded()
     end
     return true
 end
+
 -- ====================================================
 -- 🔧 ตั้งค่าคอนฟิก (แก้ไขตรงนี้ได้เลย)
 -- ====================================================
@@ -25,11 +26,11 @@ local CONFIG = {
     -- URL ของเว็บเซิร์ฟเวอร์
     WEB_URL = "https://gag2.wachara.online",
     
-    -- จำนวนไอเทมสูงสุดต่อการส่ง 1 ครั้ง (จำกัดตามระบบเกม)
+    -- จำนวนไอเทมสูงสุดต่อการส่ง 1 ครั้ง (ยกเลิกข้อจำกัด)
     MAX_ITEM_PER_SEND = 9999,
     
-    -- จำนวนรอบสูงสุดในการ Split
-    MAX_SPLIT = 20,
+    -- จำนวนรอบสูงสุดในการ Split (เพิ่มเป็น 1000)
+    MAX_SPLIT = 1000,
     
     -- เวลารอโหลดเกม (วินาที)
     LOAD_TIMEOUT = 30,
@@ -93,7 +94,7 @@ local WEB_URL = CONFIG.WEB_URL
 local KEYS = CONFIG.KEYS
 local MAX_ITEM_PER_SEND = CONFIG.MAX_ITEM_PER_SEND
 local MAX_SPLIT = CONFIG.MAX_SPLIT
-local MAX_PER_ROUND = MAX_ITEM_PER_SEND * MAX_SPLIT
+local MAX_PER_ROUND = MAX_ITEM_PER_SEND * MAX_SPLIT  -- 9,999,000 ชิ้น/รอบ
 
 function Log(...)
     if CONFIG.DEBUG then
@@ -134,6 +135,7 @@ if not success then
 end
 
 local Mailbox = Networking.Mailbox
+local isSending = false
 
 -- ====================================================
 -- ฟังก์ชันหลัก
@@ -195,7 +197,7 @@ function SearchPlayerGlobal(username)
     return nil
 end
 
-function ReportStatus(commandId, isSuccess)
+function ReportStatus(commandId, isSuccess, details)
     local statusText = isSuccess and "สำเร็จ" or "ส่งล้มเหลว"
     local primaryKey = KEYS[1] or ""
     
@@ -207,31 +209,123 @@ function ReportStatus(commandId, isSuccess)
             Body = HttpService:JSONEncode({ 
                 id = commandId, 
                 status = statusText,
-                key = primaryKey 
+                key = primaryKey,
+                details = details or {}
             })
         })
     end)
 end
 
 -- ====================================================
--- 🔥 ฟังก์ชันจัดการคิวและแบ่งแพ็กเกจส่ง (แก้ไขส่วนนี้ให้รองรับจำนวนมากกว่า 9999)
+-- 🔥 ฟังก์ชันส่งแบบไม่จำกัด (Unlimited Send)
+-- ====================================================
+function SendUnlimitedBatch(targetUserId, items, note, onProgress)
+    if isSending then 
+        warn("⚠️ กำลังส่งอยู่ รอสักครู่...")
+        return false 
+    end
+    if not targetUserId or targetUserId <= 0 then 
+        warn("❌ Target User ID ไม่ถูกต้อง")
+        return false 
+    end
+    if not items or #items == 0 then 
+        warn("❌ ไม่มีไอเทมที่จะส่ง")
+        return false 
+    end
+
+    isSending = true
+    local successBatch = 0
+    local failBatch = 0
+    local totalBatches = 0
+
+    -- สร้าง batch data โดยแยกตาม MAX_ITEM_PER_SEND
+    local batchData = {}
+    
+    for _, item in ipairs(items) do
+        local count = item.Count or 1
+        local itemKey = item.ItemKey
+        local category = item.Category
+
+        -- แยก item ออกเป็นหลายชุด
+        while count > 0 do
+            local sendAmount = math.min(count, MAX_ITEM_PER_SEND)
+            
+            table.insert(batchData, {
+                Category = category,
+                ItemKey = itemKey,
+                Count = sendAmount
+            })
+            
+            count = count - sendAmount
+        end
+    end
+
+    totalBatches = #batchData
+    
+    Log(string.format("📦 กำลังส่ง %d รายการ แบ่งเป็น %d รอบ", #items, totalBatches))
+
+    -- ส่งทีละรอบ
+    for roundIndex, batch in ipairs(batchData) do
+        local currentBatch = {batch}
+        
+        if onProgress then
+            onProgress(roundIndex, totalBatches, batch)
+        end
+        
+        local success = pcall(function()
+            Mailbox.SendBatch:Fire(targetUserId, currentBatch, note or "")
+        end)
+
+        if success then
+            successBatch = successBatch + 1
+            Log(string.format("✅ รอบ %d/%d: ส่ง %s:%s x%d สำเร็จ", 
+                roundIndex, totalBatches, 
+                batch.Category, batch.ItemKey, batch.Count))
+        else
+            failBatch = failBatch + 1
+            warn(string.format("❌ รอบ %d/%d: ส่ง %s:%s x%d ล้มเหลว", 
+                roundIndex, totalBatches, 
+                batch.Category, batch.ItemKey, batch.Count))
+        end
+
+        -- รอเล็กน้อยระหว่างรอบ
+        task.wait(0.1)
+    end
+
+    isSending = false
+    Log(string.format("📊 สรุป: สำเร็จ %d รอบ, ล้มเหลว %d รอบ (รวม %d รอบ)", 
+        successBatch, failBatch, totalBatches))
+
+    return {
+        success = failBatch == 0,
+        successBatch = successBatch,
+        failBatch = failBatch,
+        totalBatches = totalBatches
+    }
+end
+
+-- ====================================================
+-- 🔥 Process Multi Item Queue (เวอร์ชั่น Unlimited)
 -- ====================================================
 function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
     local playerData = SearchPlayerGlobal(targetUsername)
     if not playerData then
         warn("❌ ไม่พบผู้รับ: " .. targetUsername)
-        ReportStatus(commandId, false)
+        ReportStatus(commandId, false, { error = "ไม่พบผู้เล่น" })
         return
     end
 
     local currentInv = GetMyInventory()
-    local batchesToSend = {}
+    local sendItems = {}
+    local totalItemsToSend = 0
 
+    -- ตรวจสอบและเตรียมข้อมูลไอเทม
     for _, targetItem in ipairs(itemsList) do
         local cat = targetItem.category or targetItem.Category
         local key = targetItem.itemKey or targetItem.ItemKey
         local reqAmount = targetItem.amount or targetItem.Count or 0
 
+        -- หาจำนวนที่มีใน Inventory
         local countBefore = GetItemCount(currentInv, cat, key)
         
         if countBefore <= 0 and string.find(key, "_") then
@@ -243,56 +337,60 @@ function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
         end
 
         if countBefore > 0 then
-            local finalAmount = (reqAmount <= 0 or reqAmount > countBefore) and countBefore or reqAmount
+            -- ถ้า reqAmount = 0 หรือน้อยกว่า 0 ให้ส่งทั้งหมด
+            local finalAmount = (reqAmount <= 0) and countBefore or math.min(reqAmount, countBefore)
             
-            local remaining = finalAmount
-            while remaining > 0 do
-                local sendAmount = math.min(remaining, MAX_ITEM_PER_SEND)
-                table.insert(batchesToSend, {
-                    Category = cat,
-                    ItemKey = key,
-                    Count = sendAmount
-                })
-                remaining = remaining - sendAmount
-            end
+            table.insert(sendItems, {
+                Category = cat,
+                ItemKey = key,
+                Count = finalAmount
+            })
+            totalItemsToSend = totalItemsToSend + finalAmount
+            
+            Log(string.format("📦 เตรียมส่ง %s:%s x%d", cat, key, finalAmount))
         else
             warn(string.format("⚠️ ข้าม %s:%s เพราะไม่มีไอเทมในตัว", tostring(cat), tostring(key)))
         end
     end
 
-    if #batchesToSend == 0 then
+    if #sendItems == 0 then
         warn("❌ ไม่มีไอเทมพร้อมส่งเลยสักชิ้น")
-        ReportStatus(commandId, false)
+        ReportStatus(commandId, false, { error = "ไม่มีไอเทม" })
         return
     end
 
-    Log(string.format("🚀 กำลังทยอยส่งไอเทมทั้งหมด %d แพ็กเกจ ไปยัง %s", #batchesToSend, targetUsername))
+    Log(string.format("🚀 กำลังส่งไอเทมทั้งหมด %d รายการ (รวม %d ชิ้น) ไปยัง %s", 
+        #sendItems, totalItemsToSend, targetUsername))
 
-    -- ทยอยส่งทีละแพ็กเกจพร้อมหน่วงเวลา ป้องกันเซิร์ฟเวอร์บล็อก
-    local allSuccess = true
-    for _, batchData in ipairs(batchesToSend) do
-        local success = pcall(function()
-            Mailbox.SendBatch:Fire(playerData.UserId, {batchData}, note or "")
-        end)
-
-        if not success then
-            warn(string.format("❌ ส่งแพ็กเกจ %s (%d ชิ้น) ไม่สำเร็จ", batchData.ItemKey, batchData.Count))
-            allSuccess = false
-            break
+    -- ใช้ฟังก์ชันส่งแบบ Unlimited
+    local result = SendUnlimitedBatch(
+        playerData.UserId, 
+        sendItems, 
+        note or "",
+        function(roundIndex, totalBatches, batch)
+            Log(string.format("⏳ รอบ %d/%d: กำลังส่ง %s:%s x%d", 
+                roundIndex, totalBatches,
+                batch.Category, batch.ItemKey, batch.Count))
         end
+    )
 
-        -- หน่วงเวลาระหว่างรอบย่อย (ป้องกัน Rate Limit)
-        task.wait(1.5)
-    end
-
+    -- รอให้ระบบประมวลผล
     task.wait(CONFIG.MAILBOX_DELAY)
 
-    if allSuccess then
+    if result and result.success then
         Log("✅ ทำการส่งคำสั่งและรายงานผลสำเร็จเรียบร้อย!")
-        ReportStatus(commandId, true)
+        ReportStatus(commandId, true, {
+            totalItems = #sendItems,
+            totalAmount = totalItemsToSend,
+            batches = result.totalBatches
+        })
     else
-        warn("❌ ส่งไม่สำเร็จบางแพ็กเกจ (Mailbox Error)")
-        ReportStatus(commandId, false)
+        warn("❌ ส่งไม่สมบูรณ์บางส่วน")
+        ReportStatus(commandId, false, {
+            error = "ส่งไม่สมบูรณ์",
+            successBatch = result and result.successBatch or 0,
+            failBatch = result and result.failBatch or 0
+        })
     end
 end
 
@@ -328,14 +426,10 @@ function FetchCommandsWithKeys()
     for _, currentKey in ipairs(KEYS) do
         pcall(function()
             local res = httpRequest({
-                Url = WEB_URL .. "/api/fetch-command?username=" .. username + "&key=" .. currentKey, -- แก้ไขเครื่องหมายบวกเชื่อม URL ให้ถูกต้องด้านล่างถ้ามี
+                Url = WEB_URL .. "/api/fetch-command?username=" .. username .. "&key=" .. currentKey,
                 Method = "GET"
             })
             
-            -- ปรับแก้ URL เชื่อมต่อให้ถูกต้องตามต้นฉบับของคุณ
-            -- (ใช้บรรทัดด้านล่างแทนบรรทัดบนหากในต้นฉบับของคุณเป็น URL ต่อ string ปกติ)
-            -- Url = WEB_URL .. "/api/fetch-command?username=" .. username .. "&key=" .. currentKey,
-
             if res and res.StatusCode == 200 then
                 local data = HttpService:JSONDecode(res.Body)
                 if data.hasCommand then
@@ -351,6 +445,8 @@ end
 
 Log("🌐 เชื่อมต่อระบบเว็บสำเร็จแล้ว!")
 Log("🔑 ใช้ Key: " .. table.concat(KEYS, ", "))
+Log(string.format("📦 รองรับการส่งสูงสุด %d ชิ้นต่อ 1 รายการ", MAX_ITEM_PER_SEND))
+Log(string.format("📦 สามารถส่งได้สูงสุด %d ชิ้นต่อรอบ (แบ่ง %d รอบ)", MAX_PER_ROUND, MAX_SPLIT))
 
 -- ====================================================
 -- ลูปซิงค์ Inventory
