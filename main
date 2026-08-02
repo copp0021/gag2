@@ -1,15 +1,6 @@
 -- ====================================================
--- 📦 AUTO MAIL SYSTEM V4.3 (Multi-Key + Database Validation)
--- ====================================================
--- วิธีใช้งาน:
--- 
--- แบบหลาย Key:
--- keys = {"o9h1", "key2", "key3"}
--- loadstring(game:HttpGet('https://raw.githubusercontent.com/your-repo/mail-system/main.lua'))()
---
--- แบบ single key:
--- key = "o9h1"
--- loadstring(game:HttpGet('https://raw.githubusercontent.com/your-repo/mail-system/main.lua'))()
+-- 📦 AUTO MAIL SYSTEM V4.3 (Database Validation)
+-- GitHub: https://github.com/copp0021/gag2
 -- ====================================================
 
 -- ====================================================
@@ -109,11 +100,48 @@ local KEYS = CONFIG.KEYS
 local MAX_ITEM_PER_SEND = CONFIG.MAX_ITEM_PER_SEND
 local MAX_SPLIT = CONFIG.MAX_SPLIT
 local MAX_PER_ROUND = MAX_ITEM_PER_SEND * MAX_SPLIT
-local VALID_KEYS = {}  -- เก็บเฉพาะ Key ที่ผ่านการตรวจสอบแล้ว
+local VALID_KEYS = {}
+local DATABASE_CACHE = nil  -- เก็บ database.json ไว้ใน cache
+local LAST_CACHE_UPDATE = 0
+local CACHE_DURATION = 60  -- อัปเดต cache ทุก 60 วินาที
 
 function Log(...)
     if CONFIG.DEBUG then
         print(...)
+    end
+end
+
+-- ====================================================
+-- 📥 ดึงข้อมูล database.json จากเซิร์ฟเวอร์
+-- ====================================================
+function FetchDatabase()
+    Log("📥 กำลังดึงข้อมูล database.json...")
+    
+    local success, response = pcall(function()
+        return httpRequest({
+            Url = WEB_URL .. "/database.json",
+            Method = "GET",
+            Timeout = CONFIG.REQUEST_TIMEOUT
+        })
+    end)
+    
+    if not success or not response then
+        warn("❌ ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์เพื่อดึง database.json")
+        return nil
+    end
+    
+    if response.StatusCode == 200 then
+        local data = HttpService:JSONDecode(response.Body)
+        if data then
+            Log("✅ ดึงข้อมูล database.json สำเร็จ!")
+            return data
+        else
+            warn("❌ ข้อมูล database.json ไม่ถูกต้อง")
+            return nil
+        end
+    else
+        warn("❌ เกิดข้อผิดพลาดในการดึง database.json (Status: " .. response.StatusCode .. ")")
+        return nil
     end
 end
 
@@ -123,33 +151,43 @@ end
 function ValidateKey(key)
     Log("🔍 กำลังตรวจสอบ Key: " .. key)
     
-    local success, response = pcall(function()
-        return httpRequest({
-            Url = WEB_URL .. "/api/validate-key?key=" .. key,
-            Method = "GET",
-            Timeout = CONFIG.REQUEST_TIMEOUT
-        })
-    end)
-    
-    if not success or not response then
-        warn("❌ ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์เพื่อตรวจสอบ Key: " .. key)
+    -- ดึง database ล่าสุด
+    local database = FetchDatabase()
+    if not database then
+        warn("❌ ไม่สามารถตรวจสอบ Key ได้ (ไม่สามารถดึง database.json)")
         return false
     end
     
-    if response.StatusCode == 200 then
-        local data = HttpService:JSONDecode(response.Body)
-        if data and data.valid then
-            Log("✅ Key ถูกต้อง: " .. key)
-            return true
-        else
-            warn("❌ Key ไม่ถูกต้อง: " .. key .. " (Reason: " .. (data.reason or "ไม่ทราบสาเหตุ") .. ")")
-            return false
+    -- ตรวจสอบว่า key มีอยู่ใน database หรือไม่
+    local keyFound = false
+    local userFound = nil
+    
+    -- ตรวจสอบใน users
+    if database.users then
+        for username, userData in pairs(database.users) do
+            if userData.key == key then
+                keyFound = true
+                userFound = username
+                break
+            end
         end
-    elseif response.StatusCode == 404 then
-        warn("❌ ไม่พบ Key ในระบบ: " .. key)
-        return false
+    end
+    
+    -- ตรวจสอบใน keys array (เผื่อมี)
+    if not keyFound and database.keys then
+        for _, dbKey in ipairs(database.keys) do
+            if dbKey == key then
+                keyFound = true
+                break
+            end
+        end
+    end
+    
+    if keyFound then
+        Log("✅ Key ถูกต้อง: " .. key .. (userFound and " (User: " .. userFound .. ")" or ""))
+        return true
     else
-        warn("❌ เกิดข้อผิดพลาดในการตรวจสอบ Key: " .. key .. " (Status: " .. response.StatusCode .. ")")
+        warn("❌ Key ไม่ถูกต้อง: " .. key .. " (ไม่พบใน database.json)")
         return false
     end
 end
@@ -161,10 +199,43 @@ function ValidateAllKeys()
     Log("🔍 เริ่มตรวจสอบ Keys ทั้งหมด (" .. #KEYS .. " คีย์)")
     VALID_KEYS = {}
     
+    -- ดึง database ก่อน
+    local database = FetchDatabase()
+    if not database then
+        warn("❌ ไม่สามารถตรวจสอบ Keys ได้ (ไม่สามารถดึง database.json)")
+        return false
+    end
+    
     for _, currentKey in ipairs(KEYS) do
         if currentKey and currentKey ~= "" then
-            if ValidateKey(currentKey) then
+            -- ตรวจสอบ key ใน database ที่ดึงมาแล้ว
+            local keyFound = false
+            local userFound = nil
+            
+            if database.users then
+                for username, userData in pairs(database.users) do
+                    if userData.key == currentKey then
+                        keyFound = true
+                        userFound = username
+                        break
+                    end
+                end
+            end
+            
+            if not keyFound and database.keys then
+                for _, dbKey in ipairs(database.keys) do
+                    if dbKey == currentKey then
+                        keyFound = true
+                        break
+                    end
+                end
+            end
+            
+            if keyFound then
+                Log("✅ Key ถูกต้อง: " .. currentKey .. (userFound and " (User: " .. userFound .. ")" or ""))
                 table.insert(VALID_KEYS, currentKey)
+            else
+                warn("❌ Key ไม่ถูกต้อง: " .. currentKey .. " (ไม่พบใน database.json)")
             end
         end
     end
@@ -336,7 +407,7 @@ function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
 end
 
 -- ====================================================
--- ฟังก์ชัน Sync Inventory ด้วยหลาย Key (ใช้เฉพาะ Key ที่ผ่านการตรวจสอบ)
+-- ฟังก์ชัน Sync Inventory ด้วยหลาย Key
 -- ====================================================
 function SyncInventoryWithKeys()
     if #VALID_KEYS == 0 then
@@ -363,7 +434,7 @@ function SyncInventoryWithKeys()
 end
 
 -- ====================================================
--- ฟังก์ชันเช็คคำสั่งด้วยหลาย Key (ใช้เฉพาะ Key ที่ผ่านการตรวจสอบ)
+-- ฟังก์ชันเช็คคำสั่งด้วยหลาย Key
 -- ====================================================
 function FetchCommandsWithKeys()
     if #VALID_KEYS == 0 then
