@@ -38,7 +38,7 @@ local CONFIG = {
     MAILBOX_DELAY = 0.25,
     
     -- ระยะเวลารอคั่นระหว่างเปลี่ยนชนิดไอเทม (ป้องกกันส่งพร้อมกันรัวเกินไป)
-    ITEM_QUEUE_DELAY = 0.5,
+    ITEM_QUEUE_DELAY = 2,
 
     -- ระยะเวลาการ Sync Inventory (วินาที)
     SYNC_INTERVAL = 3,
