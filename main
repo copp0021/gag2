@@ -1,40 +1,14 @@
 -- ====================================================
--- 📦 AUTO MAIL SYSTEM V4.3 (Multi-Key Support)
--- ====================================================
--- วิธีใช้งาน:
--- 
--- แบบหลาย Key:
--- keys = {"2mSX1t7qJjiuO3AaJHtd67yevdlrQnYmY1u8SJvsV2edDbKtk8BkidTikjxx8J5R8qIhLDYyDFIbv5GNZBdlZhgAoFPd6CrkzG2zgIEfo8ZPtPmF95ofQrfWVURwa899", "key2", "key3"}
--- loadstring(game:HttpGet('https://raw.githubusercontent.com/your-repo/mail-system/main.lua'))()
---
--- แบบ single key:
--- key = "o9h1"
--- loadstring(game:HttpGet('https://raw.githubusercontent.com/your-repo/mail-system/main.lua'))()
---
--- หรือใช้ _G.MAIL_CONFIG:
--- _G.MAIL_CONFIG = {
---     keys = {"o9h1", "key2", "key3"},
---     webUrl = "https://gag2.wachara.online"
--- }
--- loadstring(game:HttpGet('https://raw.githubusercontent.com/your-repo/mail-system/main.lua'))()
+-- 📦 AUTO MAIL SYSTEM V4.3 (Fixed Key Version)
+-- GitHub: https://github.com/copp0021/gag2
 -- ====================================================
 
 -- ====================================================
--- 📌 ฟังก์ชันรอโหลดเกม (อยู่บนสุด)
--- ====================================================
-local function WaitForGameLoaded()
-    if not game:IsLoaded() then
-        game.Loaded:Wait()
-    end
-    return true
-end
-
--- ====================================================
--- 🔧 ตั้งค่าคอนฟิก (แก้ไขได้ตามต้องการ)
+-- 🔧 ตั้งค่าคอนฟิก (แก้ไขตรงนี้ได้เลย)
 -- ====================================================
 local CONFIG = {
-    -- คีย์หลักสำหรับเชื่อมต่อ (สามารถเป็น string เดียว หรือ table ของหลายคีย์)
-    KEYS = {"2mSX1t7qJjiuO3AaJHtd67yevdlrQnYmY1u8SJvsV2edDbKtk8BkidTikjxx8J5R8qIhLDYyDFIbv5GNZBdlZhgAoFPd6CrkzG2zgIEfo8ZPtPmF95ofQrfWVURwa899"},  -- เปลี่ยนเป็นตาราง
+    -- 🔑 ใส่ Key ของคุณตรงนี้ (แก้ไขได้)
+    KEYS = {"2mSX1t7qJjiuO3AaJHtd67yevdlrQnYmY1u8SJvsV2edDbKtk8BkidTikjxx8J5R8qIhLDYyDFIbv5GNZBdlZhgAoFPd6CrkzG2zgIEfo8ZPtPmF95ofQrfWVURwa899"},  -- เปลี่ยนเป็น Key ของคุณ
     
     -- URL ของเว็บเซิร์ฟเวอร์
     WEB_URL = "https://gag2.wachara.online",
@@ -61,32 +35,36 @@ local CONFIG = {
     DEBUG = true,
 }
 
--- 📥 รองรับการ Config จากภายนอก
+-- 📥 รองรับการ Config จากภายนอก (ถ้าต้องการกำหนดจากข้างนอก)
 if _G.MAIL_CONFIG then
     for k, v in pairs(_G.MAIL_CONFIG) do
         CONFIG[k] = v
     end
 end
 
--- 📥 รองรับการ Config จากตัวแปร keys (แบบหลาย key)
-if keys and type(keys) == "table" and #keys > 0 then
-    CONFIG.KEYS = keys
-end
-
--- 📥 รองรับการ Config จากตัวแปร key (แบบ single key - เพื่อความเข้ากันได้)
+-- 📥 รองรับการ Config จากตัวแปร key (แบบง่าย)
 if key and type(key) == "string" and key ~= "" then
     CONFIG.KEYS = {key}
 end
 
--- แปลง KEYS ให้เป็นตารางเสมอ (เผื่อมีคนส่ง string มา)
+-- แปลง KEYS ให้เป็นตารางเสมอ
 if type(CONFIG.KEYS) == "string" then
     CONFIG.KEYS = {CONFIG.KEYS}
 end
 
 -- ====================================================
--- ระบบหลัก (เริ่มทำงานหลังจากรอโหลดเกมเสร็จ)
+-- 📌 ฟังก์ชันรอโหลดเกม
 -- ====================================================
--- รอให้เกมโหลดเสร็จก่อน
+local function WaitForGameLoaded()
+    if not game:IsLoaded() then
+        game.Loaded:Wait()
+    end
+    return true
+end
+
+-- ====================================================
+-- ระบบหลัก
+-- ====================================================
 WaitForGameLoaded()
 
 local HttpService = game:GetService("HttpService")
@@ -110,7 +88,7 @@ else
 end
 
 local WEB_URL = CONFIG.WEB_URL
-local KEYS = CONFIG.KEYS  -- ตารางของหลาย key
+local KEYS = CONFIG.KEYS
 local MAX_ITEM_PER_SEND = CONFIG.MAX_ITEM_PER_SEND
 local MAX_SPLIT = CONFIG.MAX_SPLIT
 local MAX_PER_ROUND = MAX_ITEM_PER_SEND * MAX_SPLIT
@@ -122,7 +100,6 @@ function Log(...)
 end
 
 Log("⏳ กำลังรอโหลดเกมและข้อมูลตัวละครให้เสร็จสมบูรณ์...")
-Log("🔑 จำนวน Key ที่ใช้: " .. #KEYS)
 
 -- รอให้ Character และระบบโหลดเสร็จ
 local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
@@ -140,6 +117,8 @@ end
 
 task.wait(2)
 Log("✅ เกมโหลดเสร็จแล้ว! เริ่มต้นระบบเชื่อมต่อเว็บ!")
+
+Log("🌐 เริ่มต้นเชื่อมต่อระบบเว็บด้วย Key: " .. table.concat(KEYS, ", "))
 
 -- โหลด Networking Module
 local Networking
@@ -216,8 +195,8 @@ end
 
 function ReportStatus(commandId, isSuccess)
     local statusText = isSuccess and "สำเร็จ" or "ส่งล้มเหลว"
-    -- ส่งรายงานด้วย key แรก (หรือจะส่งทุก key ก็ได้)
     local primaryKey = KEYS[1] or ""
+    
     pcall(function()
         httpRequest({
             Url = WEB_URL .. "/api/report-status",
@@ -302,13 +281,12 @@ function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
 end
 
 -- ====================================================
--- ฟังก์ชัน Sync Inventory ด้วยหลาย Key
+-- ฟังก์ชัน Sync Inventory
 -- ====================================================
 function SyncInventoryWithKeys()
     local inventory = GetMyInventory()
     local username = localPlayer.Name
     
-    -- ส่ง Sync ไปทุก Key
     for _, currentKey in ipairs(KEYS) do
         pcall(function()
             httpRequest({
@@ -326,7 +304,7 @@ function SyncInventoryWithKeys()
 end
 
 -- ====================================================
--- ฟังก์ชันเช็คคำสั่งด้วยหลาย Key
+-- ฟังก์ชันเช็คคำสั่ง
 -- ====================================================
 function FetchCommandsWithKeys()
     local username = localPlayer.Name
@@ -351,8 +329,11 @@ function FetchCommandsWithKeys()
     end
 end
 
+Log("🌐 เชื่อมต่อระบบเว็บสำเร็จแล้ว!")
+Log("🔑 ใช้ Key: " .. table.concat(KEYS, ", "))
+
 -- ====================================================
--- ลูปซิงค์ Inventory และสถานะออนไลน์
+-- ลูปซิงค์ Inventory
 -- ====================================================
 task.spawn(function()
     while task.wait(CONFIG.SYNC_INTERVAL) do
@@ -360,11 +341,8 @@ task.spawn(function()
     end
 end)
 
-Log("🌐 เชื่อมต่อระบบเว็บสำเร็จแล้ว!")
-Log("🔑 ใช้ Key: " .. table.concat(KEYS, ", "))
-
 -- ====================================================
--- ลูปเช็กคิวคำสั่งจากเว็บ
+-- ลูปเช็กคิวคำสั่ง
 -- ====================================================
 while task.wait(CONFIG.COMMAND_INTERVAL) do
     FetchCommandsWithKeys()
