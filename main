@@ -1,5 +1,5 @@
 -- ====================================================
--- 📦 AUTO MAIL SYSTEM V4.3 (Database Validation)
+-- 📦 AUTO MAIL SYSTEM V4.3 (Database Validation & Caching)
 -- GitHub: https://github.com/copp0021/gag2
 -- ====================================================
 
@@ -101,9 +101,11 @@ local MAX_ITEM_PER_SEND = CONFIG.MAX_ITEM_PER_SEND
 local MAX_SPLIT = CONFIG.MAX_SPLIT
 local MAX_PER_ROUND = MAX_ITEM_PER_SEND * MAX_SPLIT
 local VALID_KEYS = {}
-local DATABASE_CACHE = nil  -- เก็บ database.json ไว้ใน cache
+
+-- 📂 ตัวแปรสำหรับระบบ Cache Database
+local DATABASE_CACHE = nil  
 local LAST_CACHE_UPDATE = 0
-local CACHE_DURATION = 60  -- อัปเดต cache ทุก 60 วินาที
+local CACHE_DURATION = 60  -- อัปเดต cache ทุก 60 วินาที เพื่อลดภาระเซิร์ฟเวอร์
 
 function Log(...)
     if CONFIG.DEBUG then
@@ -112,10 +114,17 @@ function Log(...)
 end
 
 -- ====================================================
--- 📥 ดึงข้อมูล database.json จากเซิร์ฟเวอร์
+-- 📥 ดึงข้อมูล database.json จากเซิร์ฟเวอร์ (พร้อมระบบ Cache)
 -- ====================================================
-function FetchDatabase()
-    Log("📥 กำลังดึงข้อมูล database.json...")
+function FetchDatabase(forceRefresh)
+    local currentTime = tick()
+    
+    -- ถ้ายังมี Cache อยู่และยังไม่หมดอายุ ให้ใช้ข้อมูลเดิม
+    if not forceRefresh and DATABASE_CACHE and (currentTime - LAST_CACHE_UPDATE < CACHE_DURATION) then
+        return DATABASE_CACHE
+    end
+
+    Log("📥 กำลังดึงข้อมูล database.json ใหม่จากเซิร์ฟเวอร์...")
     
     local success, response = pcall(function()
         return httpRequest({
@@ -127,45 +136,50 @@ function FetchDatabase()
     
     if not success or not response then
         warn("❌ ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์เพื่อดึง database.json")
-        return nil
+        -- ถ้าดึงใหม่ไม่ได้ แต่มี Cache เก่า ให้ใช้ Cache เก่าแก้ขัดไปก่อน
+        return DATABASE_CACHE
     end
     
     if response.StatusCode == 200 then
-        local data = HttpService:JSONDecode(response.Body)
-        if data then
-            Log("✅ ดึงข้อมูล database.json สำเร็จ!")
-            return data
+        local successDecode, data = pcall(function()
+            return HttpService:JSONDecode(response.Body)
+        end)
+        
+        if successDecode and data then
+            DATABASE_CACHE = data
+            LAST_CACHE_UPDATE = currentTime
+            Log("✅ ดึงและอัปเดตข้อมูล database.json สำเร็จ!")
+            return DATABASE_CACHE
         else
-            warn("❌ ข้อมูล database.json ไม่ถูกต้อง")
-            return nil
+        	warn("❌ รูปแบบข้อมูล database.json ไม่ถูกต้อง (JSON Decode Error)")
+            return DATABASE_CACHE
         end
     else
-        warn("❌ เกิดข้อผิดพลาดในการดึง database.json (Status: " .. response.StatusCode .. ")")
-        return nil
+        warn("❌ เกิดข้อผิดพลาดในการดึง database.json (Status: " .. tostring(response.StatusCode) .. ")")
+        return DATABASE_CACHE
     end
 end
 
 -- ====================================================
 -- 🔍 ฟังก์ชันตรวจสอบ Key ใน database.json
 -- ====================================================
-function ValidateKey(key)
-    Log("🔍 กำลังตรวจสอบ Key: " .. key)
+function ValidateKey(targetKey, forceRefresh)
+    Log("🔍 กำลังตรวจสอบ Key: " .. targetKey)
     
-    -- ดึง database ล่าสุด
-    local database = FetchDatabase()
+    -- ดึง database (ใช้ Cache หรือโหลดใหม่ถ้าบังคับ)
+    local database = FetchDatabase(forceRefresh)
     if not database then
-        warn("❌ ไม่สามารถตรวจสอบ Key ได้ (ไม่สามารถดึง database.json)")
-        return false
+        warn("❌ ไม่สามารถตรวจสอบ Key ได้ (ไม่มีข้อมูล database)")
+        return false, nil
     end
     
-    -- ตรวจสอบว่า key มีอยู่ใน database หรือไม่
     local keyFound = false
     local userFound = nil
     
-    -- ตรวจสอบใน users
-    if database.users then
+    -- 1. ตรวจสอบในรูปแบบ Object/Dictionary (เช่น {"users": {"copp0021": {"key": "..."}}})
+    if database.users and type(database.users) == "table" then
         for username, userData in pairs(database.users) do
-            if userData.key == key then
+            if type(userData) == "table" and userData.key == targetKey then
                 keyFound = true
                 userFound = username
                 break
@@ -173,10 +187,10 @@ function ValidateKey(key)
         end
     end
     
-    -- ตรวจสอบใน keys array (เผื่อมี)
-    if not keyFound and database.keys then
+    -- 2. ตรวจสอบในรูปแบบ Array ทั่วไป (เผื่อโครงสร้างเป็นรายชื่อ key ตรงๆ)
+    if not keyFound and database.keys and type(database.keys) == "table" then
         for _, dbKey in ipairs(database.keys) do
-            if dbKey == key then
+            if dbKey == targetKey then
                 keyFound = true
                 break
             end
@@ -184,55 +198,39 @@ function ValidateKey(key)
     end
     
     if keyFound then
-        Log("✅ Key ถูกต้อง: " .. key .. (userFound and " (User: " .. userFound .. ")" or ""))
-        return true
+        Log("✅ Key ถูกต้อง: " .. targetKey .. (userFound and " (User: " .. userFound .. ")" or ""))
+        return true, userFound
     else
-        warn("❌ Key ไม่ถูกต้อง: " .. key .. " (ไม่พบใน database.json)")
-        return false
+        Log("⚠️ ไม่พบ Key: " .. targetKey)
+        return false, nil
     end
 end
 
 -- ====================================================
--- 🔍 ตรวจสอบทุก Key ที่กำหนด
+-- 🔍 ตรวจสอบทุก Key ที่กำหนด (รองรับระบบบังคับรีเฟรชหากไม่พบ)
 -- ====================================================
 function ValidateAllKeys()
     Log("🔍 เริ่มตรวจสอบ Keys ทั้งหมด (" .. #KEYS .. " คีย์)")
     VALID_KEYS = {}
     
-    -- ดึง database ก่อน
-    local database = FetchDatabase()
+    -- ดึงข้อมูลรอบแรก (ใช้ Cache ถ้ามี)
+    local database = FetchDatabase(false)
     if not database then
-        warn("❌ ไม่สามารถตรวจสอบ Keys ได้ (ไม่สามารถดึง database.json)")
+        warn("❌ ไม่สามารถตรวจสอบ Keys ได้ (ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์)")
         return false
     end
     
     for _, currentKey in ipairs(KEYS) do
         if currentKey and currentKey ~= "" then
-            -- ตรวจสอบ key ใน database ที่ดึงมาแล้ว
-            local keyFound = false
-            local userFound = nil
+            local isValid, userFound = ValidateKey(currentKey, false)
             
-            if database.users then
-                for username, userData in pairs(database.users) do
-                    if userData.key == currentKey then
-                        keyFound = true
-                        userFound = username
-                        break
-                    end
-                end
+            -- ถ้าหาไม่เจอใน Cache ลองสั่ง Force Refresh ดึงข้อมูลสดจากเว็บอีกรอบ เผื่อเพิ่งถูกสร้าง
+            if not isValid then
+                Log("🔄 ไม่พบ Key ใน Cache กำลังลองดึงข้อมูลล่าสุดจากเซิร์ฟเวอร์...")
+                isValid, userFound = ValidateKey(currentKey, true)
             end
             
-            if not keyFound and database.keys then
-                for _, dbKey in ipairs(database.keys) do
-                    if dbKey == currentKey then
-                        keyFound = true
-                        break
-                    end
-                end
-            end
-            
-            if keyFound then
-                Log("✅ Key ถูกต้อง: " .. currentKey .. (userFound and " (User: " .. userFound .. ")" or ""))
+            if isValid then
                 table.insert(VALID_KEYS, currentKey)
             else
                 warn("❌ Key ไม่ถูกต้อง: " .. currentKey .. " (ไม่พบใน database.json)")
@@ -250,7 +248,7 @@ function ValidateAllKeys()
 end
 
 -- ====================================================
--- ฟังก์ชันหลัก
+-- ฟังก์ชันหลักของระบบ (Inventory & Mailbox)
 -- ====================================================
 
 function GetMyInventory()
@@ -470,7 +468,6 @@ end
 
 Log("⏳ กำลังรอโหลดเกมและข้อมูลตัวละครให้เสร็จสมบูรณ์...")
 
--- รอให้ Character และระบบโหลดเสร็จ
 local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
 local playerGui = localPlayer:WaitForChild("PlayerGui", 30)
 
