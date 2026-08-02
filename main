@@ -279,7 +279,7 @@ function SendItemDuplex(targetUserId, category, itemKey, totalAmount, note)
 end
 
 -- ==============================================================================
--- 🔥 Process Multi Item Queue (แก้ไขเพิ่มการหน่วงเวลาระหว่างรายการ)
+-- 🔥 Process MultiItemQueue (ปรับปรุงใหม่: หากไม่ระบุจำนวน จะดึงจำนวนที่มีทั้งหมดในกระเป๋ามาส่ง)
 -- ==============================================================================
 function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
     local playerData = SearchPlayerGlobal(targetUsername)
@@ -295,13 +295,16 @@ function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
     local totalFailRounds = 0
     local processedDetails = {}
 
+    -- วนลูปเช็ครายการไอเทมทั้งหมดที่เว็บส่งมา
     for index, targetItem in ipairs(itemsList) do
         local cat = targetItem.category or targetItem.Category
         local key = targetItem.itemKey or targetItem.ItemKey
         local reqAmount = targetItem.amount or targetItem.Count or 0
 
+        -- ค้นหาจำนวนที่มีในกระเป๋าจริง
         local countBefore = GetItemCount(currentInv, cat, key)
         
+        -- ถ้าหาไม่เจอแบบเป๊ะๆ ลองแปลง underscore เป็น space
         if countBefore <= 0 and string.find(key, "_") then
             local altKey = string.gsub(key, "_", " ")
             countBefore = GetItemCount(currentInv, cat, altKey)
@@ -311,6 +314,7 @@ function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
         end
 
         if countBefore > 0 then
+            -- ถ้าเว็บส่งมาเป็น 0 หรือไม่ระบุจำนวน ให้ส่งจำนวนที่มีทั้งหมดในกระเป๋า
             local finalAmount = (reqAmount <= 0) and countBefore or math.min(reqAmount, countBefore)
             
             Log(string.format("📦 [%d/%d] เริ่มส่ง Duplex สำหรับ %s:%s x%d (มีในตัว %d ชิ้น)", index, #itemsList, cat, key, finalAmount, countBefore))
@@ -335,12 +339,12 @@ function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
                 failRounds = fRounds
             })
 
-            -- ⏱️ หน่วงเวลาเล็กน้อยก่อนส่งไอเทมชนิดถัดไป เพื่อป้องกันระบบเกมบล็อกคำสั่ง
+            -- หน่วงเวลาเล็กน้อยระหว่างเปลี่ยนชนิดไอเทม
             if index < #itemsList then
                 task.wait(CONFIG.ITEM_QUEUE_DELAY)
             end
         else
-            warn(string.format("⚠️ ข้าม %s:%s เพราะไม่มีไอเทมในตัว", tostring(cat), tostring(key)))
+            warn(string.format("⚠️ ข้าม %s:%s เพราะในกระเป๋าไม่มีไอเทมนี้ (หรือจำนวนเป็น 0)", tostring(cat), tostring(key)))
         end
     end
 
@@ -365,29 +369,6 @@ function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
             failRounds = totalFailRounds,
             details = processedDetails
         })
-    end
-end
-
--- ==============================================================================
--- ฟังก์ชัน Sync Inventory & Fetch Commands
--- ==============================================================================
-function SyncInventoryWithKeys()
-    local inventory = GetMyInventory()
-    local username = localPlayer.Name
-    
-    for _, currentKey in ipairs(KEYS) do
-        pcall(function()
-            httpRequest({
-                Url = WEB_URL .. "/api/sync-inventory",
-                Method = "POST",
-                Headers = { ["Content-Type"] = "application/json" },
-                Body = HttpService:JSONEncode({ 
-                    username = username, 
-                    key = currentKey, 
-                    inventory = inventory 
-                })
-            })
-        end)
     end
 end
 
