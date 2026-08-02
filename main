@@ -1,11 +1,11 @@
--- ====================================================
--- 📦 AUTO MAIL SYSTEM V4.3 (Ready-to-Use / Split Chunk Version)
+-- ==============================================================================
+-- 📦 AUTO MAIL SYSTEM V4.4 (Ready-to-Use / Split Chunk & Duplex Chunk Integration)
 -- GitHub: https://github.com/copp0021/gag211
--- ====================================================
+-- ==============================================================================
 
--- ====================================================
+-- ==============================================================================
 -- 📌 ฟังก์ชันรอโหลดเกม
--- ====================================================
+-- ==============================================================================
 local function WaitForGameLoaded()
     if not game:IsLoaded() then
         game.Loaded:Wait()
@@ -13,9 +13,9 @@ local function WaitForGameLoaded()
     return true
 end
 
--- ====================================================
+-- ==============================================================================
 -- 🔧 ตั้งค่าคอนฟิก (แก้ไขตรงนี้ได้เลย)
--- ====================================================
+-- ==============================================================================
 local CONFIG = {
     -- 🔑 ใส่ Key ของคุณตรงนี้ (แก้ไขได้)
     KEYS = {
@@ -28,11 +28,14 @@ local CONFIG = {
     -- จำนวนไอเทมสูงสุดต่อ 1 ช่องจดหมาย (จำกัดสูงสุดที่ 9999 ตามเกม)
     MAX_ITEM_PER_SEND = 9999,
     
+    -- จำนวนรอบการแบ่งสปลิตสูงสุดต่อแพ็กเกจ (Max Split Factor)
+    MAX_SPLIT = 20,
+    
     -- เวลารอโหลดเกม (วินาที)
     LOAD_TIMEOUT = 30,
     
-    -- ระยะเวลารอหลังส่ง Mailbox (วินาที)
-    MAILBOX_DELAY = 8,
+    -- ระยะเวลารอหลังส่ง Mailbox ต่อรอบ (วินาที)
+    MAILBOX_DELAY = 0.15,
     
     -- ระยะเวลาการ Sync Inventory (วินาที)
     SYNC_INTERVAL = 3,
@@ -60,9 +63,9 @@ if type(CONFIG.KEYS) == "string" then
     CONFIG.KEYS = {CONFIG.KEYS}
 end
 
--- ====================================================
+-- ==============================================================================
 -- ระบบหลัก
--- ====================================================
+-- ==============================================================================
 WaitForGameLoaded()
 
 local HttpService = game:GetService("HttpService")
@@ -88,6 +91,9 @@ end
 local WEB_URL = CONFIG.WEB_URL
 local KEYS = CONFIG.KEYS
 local MAX_ITEM_PER_SEND = CONFIG.MAX_ITEM_PER_SEND
+local MAX_SPLIT = CONFIG.MAX_SPLIT
+-- คำนวณจำนวนชิ้นต่อรอบสูงสุดจาก Max Item Per Send คูณ Max Split
+local MAX_PER_ROUND = MAX_ITEM_PER_SEND * MAX_SPLIT
 
 function Log(...)
     if CONFIG.DEBUG then
@@ -127,9 +133,9 @@ end
 local Mailbox = Networking.Mailbox
 local isSending = false
 
--- ====================================================
--- ฟังก์ชันหลัก
--- ====================================================
+-- ==============================================================================
+-- ฟังก์ชันจัดการข้อมูล Inventory
+-- ==============================================================================
 function GetMyInventory()
     local items = {}
     local success, PlayerStateClient = pcall(function()
@@ -205,67 +211,66 @@ function ReportStatus(commandId, isSuccess, details)
     end)
 end
 
--- ====================================================
--- 🔥 ฟังก์ชันตัดแบ่งก้อนส่งอัตโนมัติ (9999 + เศษ)
--- ====================================================
-function SendBatchMail(targetUserId, items, note)
-    if isSending then 
-        warn("⚠️ กำลังส่งอยู่ รอสักครู่...")
-        return false 
-    end
-    if not targetUserId or targetUserId <= 0 then 
-        warn("❌ Target User ID ไม่ถูกต้อง")
-        return false 
-    end
-    if not items or #items == 0 then 
-        warn("❌ ไม่มีไอเทมที่จะส่ง")
-        return false 
-    end
-
-    isSending = true
+-- ==============================================================================
+-- 🔥 ระบบการส่งจดหมายด้วยตรรกะแบบแยกก้อน Duplex Split Chunk
+-- ==============================================================================
+function SendSingleMail(targetUserId, category, itemKey, count, note)
     local batchData = {}
-    local totalSent = 0
+    local remaining = math.floor(count or 1)
 
-    for _, item in ipairs(items) do
-        local count = math.floor(item.Count or 1)
-        local itemKey = item.ItemKey
-        local category = item.Category
-
-        -- วนลูปตัดแบ่งทีละ 9999 จนกว่าจะหมด และเก็บเศษไว้ก้อนสุดท้าย
-        while count > 0 do
-            local sendAmount = math.min(count, MAX_ITEM_PER_SEND)
-            
-            if sendAmount > 0 then
-                table.insert(batchData, {
-                    Category = category,
-                    ItemKey = itemKey,
-                    Count = sendAmount
-                })
-                totalSent = totalSent + sendAmount
-            end
-            
-            count = count - sendAmount
-        end
+    while remaining > 0 do
+        local sendAmount = math.min(remaining, MAX_ITEM_PER_SEND)
+        table.insert(batchData, {
+            Category = category,
+            ItemKey = itemKey,
+            Count = sendAmount
+        })
+        remaining = remaining - sendAmount
     end
 
     local success, err = pcall(function()
         Mailbox.SendBatch:Fire(targetUserId, batchData, note or "")
     end)
 
-    isSending = false
-
-    if success then
-        Log(string.format("✅ ส่งสำเร็จ! รวมทั้งหมด %d ชิ้น", totalSent))
-        return { success = true, totalSent = totalSent }
-    else
-        warn("❌ Mailbox.SendBatch Error: " .. tostring(err))
-        return { success = false, totalSent = 0 }
-    end
+    return success
 end
 
--- ====================================================
--- 🔥 Process Multi Item Queue
--- ====================================================
+function SendItemDuplex(targetUserId, category, itemKey, totalAmount, note)
+    totalAmount = math.floor(totalAmount or 0)
+    if totalAmount <= 0 then
+        return 0, 0, 0
+    end
+
+    local totalRounds = math.ceil(totalAmount / MAX_PER_ROUND)
+    local remaining = totalAmount
+    local roundIndex = 0
+    local successRounds = 0
+    local failRounds = 0
+
+    while remaining > 0 do
+        roundIndex = roundIndex + 1
+        local roundAmount = math.min(MAX_PER_ROUND, remaining)
+        
+        Log(string.format("⏳ รอบ %d/%d: ส่ง %s:%s จำนวน %d ชิ้น", roundIndex, totalRounds, category, itemKey, roundAmount))
+
+        local ok = SendSingleMail(targetUserId, category, itemKey, roundAmount, note)
+        if ok then
+            successRounds = successRounds + 1
+        else
+            failRounds = failRounds + 1
+            warn(string.format("❌ ส่งรอบที่ %d ล้มเหลว", roundIndex))
+        end
+
+        remaining = remaining - roundAmount
+        task.wait(CONFIG.MAILBOX_DELAY)
+    end
+
+    return successRounds, failRounds, totalRounds
+end
+
+-- ==============================================================================
+-- 🔥 Process Multi Item Queue (บูรณาการการประมวลผลคำสั่งหลายรายการ)
+-- ==============================================================================
 function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
     local playerData = SearchPlayerGlobal(targetUsername)
     if not playerData then
@@ -275,8 +280,10 @@ function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
     end
 
     local currentInv = GetMyInventory()
-    local sendItems = {}
-    local totalItemsToSend = 0
+    local totalItemsProcessed = 0
+    local totalSuccessRounds = 0
+    local totalFailRounds = 0
+    local processedDetails = {}
 
     for _, targetItem in ipairs(itemsList) do
         local cat = targetItem.category or targetItem.Category
@@ -296,50 +303,59 @@ function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
         if countBefore > 0 then
             local finalAmount = (reqAmount <= 0) and countBefore or math.min(reqAmount, countBefore)
             
-            table.insert(sendItems, {
-                Category = cat,
-                ItemKey = key,
-                Count = finalAmount
+            Log(string.format("📦 เริ่มกระบวนการส่ง Duplex สำหรับ %s:%s x%d (มีในตัว %d ชิ้น)", cat, key, finalAmount, countBefore))
+
+            local sRounds, fRounds, tRounds = SendItemDuplex(
+                playerData.UserId,
+                cat,
+                key,
+                finalAmount,
+                note or ""
+            )
+
+            totalSuccessRounds = totalSuccessRounds + sRounds
+            totalFailRounds = totalFailRounds + fRounds
+            totalItemsProcessed = totalItemsProcessed + finalAmount
+
+            table.insert(processedDetails, {
+                category = cat,
+                itemKey = key,
+                sent = finalAmount,
+                successRounds = sRounds,
+                failRounds = fRounds
             })
-            totalItemsToSend = totalItemsToSend + finalAmount
-            
-            Log(string.format("📦 เตรียมส่ง %s:%s x%d (มี %d ชิ้น)", cat, key, finalAmount, countBefore))
         else
             warn(string.format("⚠️ ข้าม %s:%s เพราะไม่มีไอเทมในตัว", tostring(cat), tostring(key)))
         end
     end
 
-    if #sendItems == 0 then
+    if totalItemsProcessed == 0 then
         warn("❌ ไม่มีไอเทมพร้อมส่งเลยสักชิ้น")
         ReportStatus(commandId, false, { error = "ไม่มีไอเทม" })
         return
     end
 
-    Log(string.format("🚀 กำลังส่งไอเทมทั้งหมด %d รายการ (รวม %d ชิ้น) ไปยัง %s", 
-        #sendItems, totalItemsToSend, targetUsername))
-
-    local result = SendBatchMail(playerData.UserId, sendItems, note or "")
-
-    task.wait(CONFIG.MAILBOX_DELAY)
-
-    if result and result.success then
+    if totalFailRounds == 0 then
+        Log(string.format("✅ ส่งไอเทมทั้งหมดสำเร็จ! (รวม %d รายการ, %d ชิ้น)", #processedDetails, totalItemsProcessed))
         ReportStatus(commandId, true, {
-            totalItems = #sendItems,
-            totalAmount = totalItemsToSend,
-            sent = result.totalSent or totalItemsToSend
+            totalItems = #processedDetails,
+            totalAmount = totalItemsProcessed,
+            details = processedDetails
         })
     else
+        warn(string.format("⚠️ ส่งไอเทมไม่สมบูรณ์ สำเร็จ %d รอบ, ล้มเหลว %d รอบ", totalSuccessRounds, totalFailRounds))
         ReportStatus(commandId, false, {
-            error = "ส่งไม่สมบูรณ์",
-            sent = result and result.totalSent or 0,
-            total = totalItemsToSend
+            error = "ส่งไม่สมบูรณ์บางส่วน",
+            successRounds = totalSuccessRounds,
+            failRounds = totalFailRounds,
+            details = processedDetails
         })
     end
 end
 
--- ====================================================
+-- ==============================================================================
 -- ฟังก์ชัน Sync Inventory & Fetch Commands
--- ====================================================
+-- ==============================================================================
 function SyncInventoryWithKeys()
     local inventory = GetMyInventory()
     local username = localPlayer.Name
@@ -385,12 +401,12 @@ end
 
 Log("🌐 เชื่อมต่อระบบเว็บสำเร็จแล้ว!")
 Log("🔑 ใช้ Key: " .. table.concat(KEYS, ", "))
-Log(string.format("📦 รองรับระบบตัดแบ่งอัตโนมัติสูงสุด %d ชิ้นต่อช่อง", MAX_ITEM_PER_SEND))
+Log(string.format("📦 รองรับระบบตัดแบ่ง Duplex สูงสุด %d ชิ้น/รอบ (%d ชิ้น/ช่อง)", MAX_PER_ROUND, MAX_ITEM_PER_SEND))
 Log("✅ ระบบพร้อมทำงาน! รอรับคำสั่งจากเว็บ...")
 
--- ====================================================
--- ลูปทำงานเบื้องหลัง
--- ====================================================
+-- ==============================================================================
+-- ลูปทำงานเบื้องหลัง (Background Loop)
+-- ==============================================================================
 task.spawn(function()
     while task.wait(CONFIG.SYNC_INTERVAL) do
         SyncInventoryWithKeys()
