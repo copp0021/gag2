@@ -1,6 +1,22 @@
 -- ====================================================
--- 📦 AUTO MAIL SYSTEM V4.3 (Database Validation)
--- GitHub: https://github.com/copp0021/gag2
+-- 📦 AUTO MAIL SYSTEM V4.3 (Multi-Key Support)
+-- ====================================================
+-- วิธีใช้งาน:
+-- 
+-- แบบหลาย Key:
+-- keys = {"2mSX1t7qJjiuO3AaJHtd67yevdlrQnYmY1u8SJvsV2edDbKtk8BkidTikjxx8J5R8qIhLDYyDFIbv5GNZBdlZhgAoFPd6CrkzG2zgIEfo8ZPtPmF95ofQrfWVURwa899", "key2", "key3"}
+-- loadstring(game:HttpGet('https://raw.githubusercontent.com/your-repo/mail-system/main.lua'))()
+--
+-- แบบ single key:
+-- key = "o9h1"
+-- loadstring(game:HttpGet('https://raw.githubusercontent.com/your-repo/mail-system/main.lua'))()
+--
+-- หรือใช้ _G.MAIL_CONFIG:
+-- _G.MAIL_CONFIG = {
+--     keys = {"o9h1", "key2", "key3"},
+--     webUrl = "https://gag2.wachara.online"
+-- }
+-- loadstring(game:HttpGet('https://raw.githubusercontent.com/your-repo/mail-system/main.lua'))()
 -- ====================================================
 
 -- ====================================================
@@ -18,7 +34,7 @@ end
 -- ====================================================
 local CONFIG = {
     -- คีย์หลักสำหรับเชื่อมต่อ (สามารถเป็น string เดียว หรือ table ของหลายคีย์)
-    KEYS = {"o9h1"},
+    KEYS = {"o9h1"},  -- เปลี่ยนเป็นตาราง
     
     -- URL ของเว็บเซิร์ฟเวอร์
     WEB_URL = "https://gag2.wachara.online",
@@ -43,9 +59,6 @@ local CONFIG = {
     
     -- เปิด/ปิด Debug Mode
     DEBUG = true,
-    
-    -- ระยะเวลารอตอบกลับจากเซิร์ฟเวอร์ (วินาที)
-    REQUEST_TIMEOUT = 10,
 }
 
 -- 📥 รองรับการ Config จากภายนอก
@@ -60,12 +73,12 @@ if keys and type(keys) == "table" and #keys > 0 then
     CONFIG.KEYS = keys
 end
 
--- 📥 รองรับการ Config จากตัวแปร key (แบบ single key)
+-- 📥 รองรับการ Config จากตัวแปร key (แบบ single key - เพื่อความเข้ากันได้)
 if key and type(key) == "string" and key ~= "" then
     CONFIG.KEYS = {key}
 end
 
--- แปลง KEYS ให้เป็นตารางเสมอ
+-- แปลง KEYS ให้เป็นตารางเสมอ (เผื่อมีคนส่ง string มา)
 if type(CONFIG.KEYS) == "string" then
     CONFIG.KEYS = {CONFIG.KEYS}
 end
@@ -73,6 +86,7 @@ end
 -- ====================================================
 -- ระบบหลัก (เริ่มทำงานหลังจากรอโหลดเกมเสร็จ)
 -- ====================================================
+-- รอให้เกมโหลดเสร็จก่อน
 WaitForGameLoaded()
 
 local HttpService = game:GetService("HttpService")
@@ -96,14 +110,10 @@ else
 end
 
 local WEB_URL = CONFIG.WEB_URL
-local KEYS = CONFIG.KEYS
+local KEYS = CONFIG.KEYS  -- ตารางของหลาย key
 local MAX_ITEM_PER_SEND = CONFIG.MAX_ITEM_PER_SEND
 local MAX_SPLIT = CONFIG.MAX_SPLIT
 local MAX_PER_ROUND = MAX_ITEM_PER_SEND * MAX_SPLIT
-local VALID_KEYS = {}
-local DATABASE_CACHE = nil  -- เก็บ database.json ไว้ใน cache
-local LAST_CACHE_UPDATE = 0
-local CACHE_DURATION = 60  -- อัปเดต cache ทุก 60 วินาที
 
 function Log(...)
     if CONFIG.DEBUG then
@@ -111,143 +121,38 @@ function Log(...)
     end
 end
 
--- ====================================================
--- 📥 ดึงข้อมูล database.json จากเซิร์ฟเวอร์
--- ====================================================
-function FetchDatabase()
-    Log("📥 กำลังดึงข้อมูล database.json...")
-    
-    local success, response = pcall(function()
-        return httpRequest({
-            Url = WEB_URL .. "/database.json",
-            Method = "GET",
-            Timeout = CONFIG.REQUEST_TIMEOUT
-        })
+Log("⏳ กำลังรอโหลดเกมและข้อมูลตัวละครให้เสร็จสมบูรณ์...")
+Log("🔑 จำนวน Key ที่ใช้: " .. #KEYS)
+
+-- รอให้ Character และระบบโหลดเสร็จ
+local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+local playerGui = localPlayer:WaitForChild("PlayerGui", 30)
+
+local timeout = CONFIG.LOAD_TIMEOUT
+local startTime = tick()
+while tick() - startTime < timeout do
+    local success = pcall(function()
+        return require(ReplicatedStorage:WaitForChild("ClientModules"):WaitForChild("PlayerStateClient"))
     end)
-    
-    if not success or not response then
-        warn("❌ ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์เพื่อดึง database.json")
-        return nil
-    end
-    
-    if response.StatusCode == 200 then
-        local data = HttpService:JSONDecode(response.Body)
-        if data then
-            Log("✅ ดึงข้อมูล database.json สำเร็จ!")
-            return data
-        else
-            warn("❌ ข้อมูล database.json ไม่ถูกต้อง")
-            return nil
-        end
-    else
-        warn("❌ เกิดข้อผิดพลาดในการดึง database.json (Status: " .. response.StatusCode .. ")")
-        return nil
-    end
+    if success then break end
+    task.wait(1)
 end
 
--- ====================================================
--- 🔍 ฟังก์ชันตรวจสอบ Key ใน database.json
--- ====================================================
-function ValidateKey(key)
-    Log("🔍 กำลังตรวจสอบ Key: " .. key)
-    
-    -- ดึง database ล่าสุด
-    local database = FetchDatabase()
-    if not database then
-        warn("❌ ไม่สามารถตรวจสอบ Key ได้ (ไม่สามารถดึง database.json)")
-        return false
-    end
-    
-    -- ตรวจสอบว่า key มีอยู่ใน database หรือไม่
-    local keyFound = false
-    local userFound = nil
-    
-    -- ตรวจสอบใน users
-    if database.users then
-        for username, userData in pairs(database.users) do
-            if userData.key == key then
-                keyFound = true
-                userFound = username
-                break
-            end
-        end
-    end
-    
-    -- ตรวจสอบใน keys array (เผื่อมี)
-    if not keyFound and database.keys then
-        for _, dbKey in ipairs(database.keys) do
-            if dbKey == key then
-                keyFound = true
-                break
-            end
-        end
-    end
-    
-    if keyFound then
-        Log("✅ Key ถูกต้อง: " .. key .. (userFound and " (User: " .. userFound .. ")" or ""))
-        return true
-    else
-        warn("❌ Key ไม่ถูกต้อง: " .. key .. " (ไม่พบใน database.json)")
-        return false
-    end
+task.wait(2)
+Log("✅ เกมโหลดเสร็จแล้ว! เริ่มต้นระบบเชื่อมต่อเว็บ!")
+
+-- โหลด Networking Module
+local Networking
+local success, err = pcall(function()
+    Networking = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Networking"))
+end)
+
+if not success then
+    warn("ไม่พบ Networking Module: " .. tostring(err))
+    return
 end
 
--- ====================================================
--- 🔍 ตรวจสอบทุก Key ที่กำหนด
--- ====================================================
-function ValidateAllKeys()
-    Log("🔍 เริ่มตรวจสอบ Keys ทั้งหมด (" .. #KEYS .. " คีย์)")
-    VALID_KEYS = {}
-    
-    -- ดึง database ก่อน
-    local database = FetchDatabase()
-    if not database then
-        warn("❌ ไม่สามารถตรวจสอบ Keys ได้ (ไม่สามารถดึง database.json)")
-        return false
-    end
-    
-    for _, currentKey in ipairs(KEYS) do
-        if currentKey and currentKey ~= "" then
-            -- ตรวจสอบ key ใน database ที่ดึงมาแล้ว
-            local keyFound = false
-            local userFound = nil
-            
-            if database.users then
-                for username, userData in pairs(database.users) do
-                    if userData.key == currentKey then
-                        keyFound = true
-                        userFound = username
-                        break
-                    end
-                end
-            end
-            
-            if not keyFound and database.keys then
-                for _, dbKey in ipairs(database.keys) do
-                    if dbKey == currentKey then
-                        keyFound = true
-                        break
-                    end
-                end
-            end
-            
-            if keyFound then
-                Log("✅ Key ถูกต้อง: " .. currentKey .. (userFound and " (User: " .. userFound .. ")" or ""))
-                table.insert(VALID_KEYS, currentKey)
-            else
-                warn("❌ Key ไม่ถูกต้อง: " .. currentKey .. " (ไม่พบใน database.json)")
-            end
-        end
-    end
-    
-    if #VALID_KEYS == 0 then
-        warn("❌ ไม่มี Key ที่ถูกต้องเลย! ระบบจะไม่ทำงาน")
-        return false
-    end
-    
-    Log("✅ พบ Key ที่ใช้งานได้ทั้งหมด " .. #VALID_KEYS .. " คีย์: " .. table.concat(VALID_KEYS, ", "))
-    return true
-end
+local Mailbox = Networking.Mailbox
 
 -- ====================================================
 -- ฟังก์ชันหลัก
@@ -311,13 +216,8 @@ end
 
 function ReportStatus(commandId, isSuccess)
     local statusText = isSuccess and "สำเร็จ" or "ส่งล้มเหลว"
-    local primaryKey = VALID_KEYS[1] or ""
-    
-    if primaryKey == "" then
-        warn("⚠️ ไม่มี Key ที่ถูกต้องสำหรับรายงานสถานะ")
-        return
-    end
-    
+    -- ส่งรายงานด้วย key แรก (หรือจะส่งทุก key ก็ได้)
+    local primaryKey = KEYS[1] or ""
     pcall(function()
         httpRequest({
             Url = WEB_URL .. "/api/report-status",
@@ -333,11 +233,6 @@ function ReportStatus(commandId, isSuccess)
 end
 
 function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
-    if #VALID_KEYS == 0 then
-        warn("❌ ไม่มี Key ที่ถูกต้อง ไม่สามารถส่งของได้")
-        return
-    end
-    
     local playerData = SearchPlayerGlobal(targetUsername)
     if not playerData then
         warn("❌ ไม่พบผู้รับ: " .. targetUsername)
@@ -410,14 +305,11 @@ end
 -- ฟังก์ชัน Sync Inventory ด้วยหลาย Key
 -- ====================================================
 function SyncInventoryWithKeys()
-    if #VALID_KEYS == 0 then
-        return
-    end
-    
     local inventory = GetMyInventory()
     local username = localPlayer.Name
     
-    for _, currentKey in ipairs(VALID_KEYS) do
+    -- ส่ง Sync ไปทุก Key
+    for _, currentKey in ipairs(KEYS) do
         pcall(function()
             httpRequest({
                 Url = WEB_URL .. "/api/sync-inventory",
@@ -437,18 +329,13 @@ end
 -- ฟังก์ชันเช็คคำสั่งด้วยหลาย Key
 -- ====================================================
 function FetchCommandsWithKeys()
-    if #VALID_KEYS == 0 then
-        return
-    end
-    
     local username = localPlayer.Name
     
-    for _, currentKey in ipairs(VALID_KEYS) do
+    for _, currentKey in ipairs(KEYS) do
         pcall(function()
             local res = httpRequest({
                 Url = WEB_URL .. "/api/fetch-command?username=" .. username .. "&key=" .. currentKey,
-                Method = "GET",
-                Timeout = CONFIG.REQUEST_TIMEOUT
+                Method = "GET"
             })
             
             if res and res.StatusCode == 200 then
@@ -465,54 +352,6 @@ function FetchCommandsWithKeys()
 end
 
 -- ====================================================
--- 🚀 เริ่มต้นระบบ
--- ====================================================
-
-Log("⏳ กำลังรอโหลดเกมและข้อมูลตัวละครให้เสร็จสมบูรณ์...")
-
--- รอให้ Character และระบบโหลดเสร็จ
-local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
-local playerGui = localPlayer:WaitForChild("PlayerGui", 30)
-
-local timeout = CONFIG.LOAD_TIMEOUT
-local startTime = tick()
-while tick() - startTime < timeout do
-    local success = pcall(function()
-        return require(ReplicatedStorage:WaitForChild("ClientModules"):WaitForChild("PlayerStateClient"))
-    end)
-    if success then break end
-    task.wait(1)
-end
-
-task.wait(2)
-Log("✅ เกมโหลดเสร็จแล้ว!")
-
--- 🔍 ตรวจสอบ Key ทั้งหมดก่อนเริ่มทำงาน
-Log("🌐 กำลังเชื่อมต่อและตรวจสอบ Key...")
-local keysValid = ValidateAllKeys()
-
-if not keysValid then
-    warn("❌ ไม่มี Key ที่ถูกต้อง ระบบจะไม่ทำงาน")
-    return
-end
-
--- โหลด Networking Module
-local Networking
-local success, err = pcall(function()
-    Networking = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Networking"))
-end)
-
-if not success then
-    warn("ไม่พบ Networking Module: " .. tostring(err))
-    return
-end
-
-local Mailbox = Networking.Mailbox
-
-Log("🌐 เชื่อมต่อระบบเว็บสำเร็จแล้ว!")
-Log("🔑 ใช้ Key ที่ผ่านการตรวจสอบ: " .. table.concat(VALID_KEYS, ", "))
-
--- ====================================================
 -- ลูปซิงค์ Inventory และสถานะออนไลน์
 -- ====================================================
 task.spawn(function()
@@ -520,6 +359,9 @@ task.spawn(function()
         SyncInventoryWithKeys()
     end
 end)
+
+Log("🌐 เชื่อมต่อระบบเว็บสำเร็จแล้ว!")
+Log("🔑 ใช้ Key: " .. table.concat(KEYS, ", "))
 
 -- ====================================================
 -- ลูปเช็กคิวคำสั่งจากเว็บ
