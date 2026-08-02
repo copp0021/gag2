@@ -26,11 +26,11 @@ local CONFIG = {
     -- URL ของเว็บเซิร์ฟเวอร์
     WEB_URL = "https://gag2.wachara.online",
     
-    -- จำนวนไอเทมสูงสุดต่อการส่ง 1 ครั้ง (ยกเลิกข้อจำกัด)
+    -- จำนวนไอเทมสูงสุดต่อการส่ง 1 ครั้ง (จำกัดที่ 9999 ตามเกม)
     MAX_ITEM_PER_SEND = 9999,
     
     -- จำนวนรอบสูงสุดในการ Split (เพิ่มเป็น 1000)
-    MAX_SPLIT = 1000,
+    MAX_SPLIT = 20,
     
     -- เวลารอโหลดเกม (วินาที)
     LOAD_TIMEOUT = 30,
@@ -237,6 +237,7 @@ function SendUnlimitedBatch(targetUserId, items, note, onProgress)
     local successBatch = 0
     local failBatch = 0
     local totalBatches = 0
+    local totalSent = 0
 
     -- สร้าง batch data โดยแยกตาม MAX_ITEM_PER_SEND
     local batchData = {}
@@ -246,15 +247,18 @@ function SendUnlimitedBatch(targetUserId, items, note, onProgress)
         local itemKey = item.ItemKey
         local category = item.Category
 
-        -- แยก item ออกเป็นหลายชุด
+        -- แยก item ออกเป็นหลายชุด โดยแต่ละชุดส่งได้สูงสุด 9999 ชิ้น
         while count > 0 do
             local sendAmount = math.min(count, MAX_ITEM_PER_SEND)
             
-            table.insert(batchData, {
-                Category = category,
-                ItemKey = itemKey,
-                Count = sendAmount
-            })
+            if sendAmount > 0 then
+                table.insert(batchData, {
+                    Category = category,
+                    ItemKey = itemKey,
+                    Count = sendAmount
+                })
+                totalSent = totalSent + sendAmount
+            end
             
             count = count - sendAmount
         end
@@ -262,7 +266,8 @@ function SendUnlimitedBatch(targetUserId, items, note, onProgress)
 
     totalBatches = #batchData
     
-    Log(string.format("📦 กำลังส่ง %d รายการ แบ่งเป็น %d รอบ", #items, totalBatches))
+    Log(string.format("📦 กำลังส่ง %d รายการ รวม %d ชิ้น แบ่งเป็น %d รอบ", 
+        #items, totalSent, totalBatches))
 
     -- ส่งทีละรอบ
     for roundIndex, batch in ipairs(batchData) do
@@ -293,14 +298,15 @@ function SendUnlimitedBatch(targetUserId, items, note, onProgress)
     end
 
     isSending = false
-    Log(string.format("📊 สรุป: สำเร็จ %d รอบ, ล้มเหลว %d รอบ (รวม %d รอบ)", 
-        successBatch, failBatch, totalBatches))
+    Log(string.format("📊 สรุป: สำเร็จ %d รอบ, ล้มเหลว %d รอบ (รวม %d รอบ, ส่งรวม %d ชิ้น)", 
+        successBatch, failBatch, totalBatches, totalSent))
 
     return {
         success = failBatch == 0,
         successBatch = successBatch,
         failBatch = failBatch,
-        totalBatches = totalBatches
+        totalBatches = totalBatches,
+        totalSent = totalSent
     }
 end
 
@@ -347,7 +353,7 @@ function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
             })
             totalItemsToSend = totalItemsToSend + finalAmount
             
-            Log(string.format("📦 เตรียมส่ง %s:%s x%d", cat, key, finalAmount))
+            Log(string.format("📦 เตรียมส่ง %s:%s x%d (มี %d ชิ้น)", cat, key, finalAmount, countBefore))
         else
             warn(string.format("⚠️ ข้าม %s:%s เพราะไม่มีไอเทมในตัว", tostring(cat), tostring(key)))
         end
@@ -378,18 +384,22 @@ function ProcessMultiItemQueue(commandId, targetUsername, itemsList, note)
     task.wait(CONFIG.MAILBOX_DELAY)
 
     if result and result.success then
-        Log("✅ ทำการส่งคำสั่งและรายงานผลสำเร็จเรียบร้อย!")
+        Log(string.format("✅ ทำการส่งคำสั่งสำเร็จ! ส่งไปแล้ว %d ชิ้น จากทั้งหมด %d ชิ้น", 
+            result.totalSent or totalItemsToSend, totalItemsToSend))
         ReportStatus(commandId, true, {
             totalItems = #sendItems,
             totalAmount = totalItemsToSend,
-            batches = result.totalBatches
+            batches = result.totalBatches,
+            sent = result.totalSent or totalItemsToSend
         })
     else
         warn("❌ ส่งไม่สมบูรณ์บางส่วน")
         ReportStatus(commandId, false, {
             error = "ส่งไม่สมบูรณ์",
             successBatch = result and result.successBatch or 0,
-            failBatch = result and result.failBatch or 0
+            failBatch = result and result.failBatch or 0,
+            sent = result and result.totalSent or 0,
+            total = totalItemsToSend
         })
     end
 end
@@ -445,8 +455,9 @@ end
 
 Log("🌐 เชื่อมต่อระบบเว็บสำเร็จแล้ว!")
 Log("🔑 ใช้ Key: " .. table.concat(KEYS, ", "))
-Log(string.format("📦 รองรับการส่งสูงสุด %d ชิ้นต่อ 1 รายการ", MAX_ITEM_PER_SEND))
-Log(string.format("📦 สามารถส่งได้สูงสุด %d ชิ้นต่อรอบ (แบ่ง %d รอบ)", MAX_PER_ROUND, MAX_SPLIT))
+Log(string.format("📦 รองรับการส่งสูงสุด %d ชิ้นต่อ 1 รอบ", MAX_ITEM_PER_SEND))
+Log(string.format("📦 สามารถส่งได้สูงสุด %d ชิ้นต่อคำสั่ง (แบ่ง %d รอบ)", MAX_PER_ROUND, MAX_SPLIT))
+Log("✅ ระบบพร้อมทำงาน! รอรับคำสั่งจากเว็บ...")
 
 -- ====================================================
 -- ลูปซิงค์ Inventory
