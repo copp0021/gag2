@@ -34,7 +34,7 @@ end
 -- ====================================================
 local CONFIG = {
     -- คีย์หลักสำหรับเชื่อมต่อ (สามารถเป็น string เดียว หรือ table ของหลายคีย์)
-    KEYS = {"o9h1"},  -- เปลี่ยนเป็นตาราง
+    KEYS = {"2mSX1t7qJjiuO3AaJHtd67yevdlrQnYmY1u8SJvsV2edDbKtk8BkidTikjxx8J5R8qIhLDYyDFIbv5GNZBdlZhgAoFPd6CrkzG2zgIEfo8ZPtPmF95ofQrfWVURwa899"},  -- เปลี่ยนเป็นตาราง
     
     -- URL ของเว็บเซิร์ฟเวอร์
     WEB_URL = "https://gag2.wachara.online",
