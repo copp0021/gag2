@@ -2,7 +2,15 @@
 -- 📦 AUTO MAIL SYSTEM V4.3 (Fixed Key Version)
 -- GitHub: https://github.com/copp0021/gag2
 -- ====================================================
-
+-- ====================================================
+-- 📌 ฟังก์ชันรอโหลดเกม
+-- ====================================================
+local function WaitForGameLoaded()
+    if not game:IsLoaded() then
+        game.Loaded:Wait()
+    end
+    return true
+end
 -- ====================================================
 -- 🔧 ตั้งค่าคอนฟิก (แก้ไขตรงนี้ได้เลย)
 -- ====================================================
@@ -52,15 +60,7 @@ if type(CONFIG.KEYS) == "string" then
     CONFIG.KEYS = {CONFIG.KEYS}
 end
 
--- ====================================================
--- 📌 ฟังก์ชันรอโหลดเกม
--- ====================================================
-local function WaitForGameLoaded()
-    if not game:IsLoaded() then
-        game.Loaded:Wait()
-    end
-    return true
-end
+
 
 -- ====================================================
 -- ระบบหลัก
